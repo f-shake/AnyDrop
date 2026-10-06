@@ -6,7 +6,7 @@ namespace AnyDrop.Server;
 
 /// <summary>
 /// Token 为 null 表示管理端上传：没有密钥身份，因此不占配额、不记 token 用量，
-/// 命名空间取 <see cref="TokenService.DefaultNamespace"/>，落库时用 <see cref="AdminUploadIdentity"/> 记账。
+/// 落库时 <see cref="BlobRecord.TokenId"/> 记 null。
 /// </summary>
 public sealed record UploadRequest(
     TokenRecord? Token,
@@ -36,13 +36,8 @@ public sealed class BlobService(
     public async Task<ServiceResult<UploadResponse>> UploadAsync(UploadRequest request, CancellationToken cancellationToken)
     {
         var token = request.Token;
-        if (token is not null && !token.CanUpload)
-            return ServiceResult<UploadResponse>.Fail(403, ErrorCodes.ScopeDenied, "该密钥无权上传");
-
-        // 记账身份与命名空间：真实密钥，或管理端上传的哨兵身份 + 默认命名空间。
-        // 哨兵让管理端上传的文件与「建 token 时未指定命名空间」的密钥同处 default，现有读密钥立刻能取走。
-        var ownerId = token?.Id ?? AdminUploadIdentity.TokenId;
-        var ns = token?.Namespace ?? TokenService.DefaultNamespace;
+        // 记账身份：真实密钥，或 null（管理端直接上传，不属于任何密钥）。
+        var ownerId = token?.Id;
         if (request.ContentLength < 0)
             return ServiceResult<UploadResponse>.Fail(411, ErrorCodes.LengthRequired, "上传必须带 Content-Length");
 
@@ -155,7 +150,6 @@ public sealed class BlobService(
                     WrappedDek = encrypted.WrappedDek,
                     DekNonce = encrypted.DekNonce,
                     TokenId = ownerId,
-                    Namespace = ns,
                     CreatedAt = Time.NowIso(),
                     ExpiresAt = Time.AddDaysIso(config.Retention.DefaultTtlDays),
                 };
@@ -182,7 +176,7 @@ public sealed class BlobService(
             }
 
             stored = true;
-            await index.InsertAuditAsync("blob.upload", ownerId, blob.Id, ns, request.Ip, blob.Size,
+            await index.InsertAuditAsync("blob.upload", ownerId, blob.Id, request.Ip, blob.Size,
                 request.FileName, cancellationToken);
             if (token is not null) await index.TouchTokenAsync(token.Id, Time.NowIso(), cancellationToken);
 
@@ -236,29 +230,23 @@ public sealed class BlobService(
         }
     }
 
-    /// <summary>只做元数据与权限判断，不打开密文文件。</summary>
-    public async Task<ServiceResult<BlobRecord>> GetFileInfoAsync(
-        string blobId, TokenRecord? token, bool isAdmin, CancellationToken cancellationToken)
+    /// <summary>
+    /// 只查元数据，不打开密文文件，也**不做任何权限判断**：下载凭证就是 blob id 本身
+    /// （128 bit 随机、不可枚举），谁拿到 id 谁就能取。唯一不放行的情况是「不存在」或「已过期」。
+    /// </summary>
+    public async Task<ServiceResult<BlobRecord>> GetFileInfoAsync(string blobId, CancellationToken cancellationToken)
     {
         if (!Ids.IsBlobId(blobId))
             return ServiceResult<BlobRecord>.Fail(404, ErrorCodes.NotFound, "文件不存在或已过期");
         var blob = await index.GetBlobAsync(blobId, cancellationToken);
         if (blob is null || Time.IsExpired(blob.ExpiresAt, DateTimeOffset.UtcNow))
             return ServiceResult<BlobRecord>.Fail(404, ErrorCodes.NotFound, "文件不存在或已过期");
-
-        if (!isAdmin)
-        {
-            if (token is null || !token.CanRead)
-                return ServiceResult<BlobRecord>.Fail(403, ErrorCodes.ScopeDenied, "该密钥无权下载文件");
-            if (!string.Equals(token.Namespace, blob.Namespace, StringComparison.Ordinal))
-                return ServiceResult<BlobRecord>.Fail(403, ErrorCodes.ScopeDenied, "该密钥无权访问该命名空间的文件");
-        }
         return ServiceResult<BlobRecord>.Success(blob);
     }
 
-    public async Task<ServiceResult<DownloadHandle>> OpenDownloadAsync(string blobId, TokenRecord? token, bool isAdmin, CancellationToken cancellationToken)
+    public async Task<ServiceResult<DownloadHandle>> OpenDownloadAsync(string blobId, CancellationToken cancellationToken)
     {
-        var info = await GetFileInfoAsync(blobId, token, isAdmin, cancellationToken);
+        var info = await GetFileInfoAsync(blobId, cancellationToken);
         if (!info.Ok) return ServiceResult<DownloadHandle>.Fail(info.Failure!.Value);
         var blob = info.Value!;
 
@@ -303,7 +291,7 @@ public sealed class BlobService(
         try
         {
             await index.IncrementDownloadCountAsync(blob.Id, cancellationToken);
-            await index.InsertAuditAsync("blob.download", blob.TokenId, blob.Id, blob.Namespace, ip, blob.Size, null, cancellationToken);
+            await index.InsertAuditAsync("blob.download", blob.TokenId, blob.Id, ip, blob.Size, null, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -311,8 +299,11 @@ public sealed class BlobService(
         }
     }
 
-    public async Task<ServiceResult<bool>> DeleteAsync(
-        string blobId, TokenRecord? token, bool isAdmin, string ip, CancellationToken cancellationToken)
+    /// <summary>
+    /// 删除只对管理会话开放（上传密钥没有任何删除权）。若删掉的是某把密钥上传的文件，
+    /// 把字节还给它，否则那把密钥的配额会被一个服务器上已不存在的文件永久占住。
+    /// </summary>
+    public async Task<ServiceResult<bool>> DeleteAsync(string blobId, string ip, CancellationToken cancellationToken)
     {
         if (!Ids.IsBlobId(blobId))
             return ServiceResult<bool>.Fail(404, ErrorCodes.NotFound, "文件不存在或已过期");
@@ -320,18 +311,16 @@ public sealed class BlobService(
         if (blob is null)
             return ServiceResult<bool>.Fail(404, ErrorCodes.NotFound, "文件不存在或已过期");
 
-        if (!isAdmin)
-        {
-            if (token is null || !token.CanDelete)
-                return ServiceResult<bool>.Fail(403, ErrorCodes.ScopeDenied, "该密钥无权删除文件");
-            if (!string.Equals(token.Namespace, blob.Namespace, StringComparison.Ordinal))
-                return ServiceResult<bool>.Fail(403, ErrorCodes.ScopeDenied, "该密钥无权访问该命名空间的文件");
-        }
+        var removed = await index.DeleteBlobAsync(blobId, cancellationToken);
+        if (!removed)
+            return ServiceResult<bool>.Fail(404, ErrorCodes.NotFound, "文件不存在或已过期");
 
-        await index.DeleteBlobAsync(blobId, cancellationToken);
+        // 扣减只在「这一行确实是我删掉的」时执行：删行返回值是唯一的并发闸门。
+        // 若无条件扣减，两次并发删除（双击、前端重试、GC 同时回收同一 id）会都读到这一行、
+        // 各扣一次，只有一次真删掉记录 —— used_bytes 就会低于现存 blob 之和，密钥能超额占盘。
         store.Delete(blob.CipherPath);
-        await index.AddTokenUsageAsync(blob.TokenId, -blob.Size, cancellationToken);
-        await index.InsertAuditAsync("blob.delete", token?.Id, blob.Id, blob.Namespace, ip, blob.Size, null, cancellationToken);
+        if (blob.TokenId is not null) await index.AddTokenUsageAsync(blob.TokenId, -blob.Size, cancellationToken);
+        await index.InsertAuditAsync("blob.delete", blob.TokenId, blob.Id, ip, blob.Size, null, cancellationToken);
         return ServiceResult<bool>.Success(true);
     }
 
@@ -343,8 +332,14 @@ public sealed class BlobService(
         page = Math.Clamp(page, 1, 1_000_000);
         size = Math.Clamp(size, 1, 200);
         var (total, items) = await index.ListBlobsAsync(query, page, size, cancellationToken);
-        return new FileListResponse(total, page, size, items.Select(b => b.ToDto()).ToList());
+        return new FileListResponse(total, page, size, items.Select(ToFileDto).ToList());
     }
+
+    /// <summary>
+    /// 管理端列表里的文件信息，<c>url</c> 用**直链**（{publicBaseUrl}/v1/blobs/{id}）：
+    /// 人和 AI 拿同一个链接就能拿到字节，不需要把 /f/ 改写成 /v1/blobs/。
+    /// </summary>
+    private FileInfoDto ToFileDto(BlobRecord blob) => blob.ToDto(config.PublicUrl($"v1/blobs/{blob.Id}"));
 
     public async Task<ServiceResult<FileInfoDto>> SetExpiryAsync(string blobId, int days, CancellationToken cancellationToken)
     {
@@ -356,7 +351,7 @@ public sealed class BlobService(
         var expiresAt = Time.AddDaysIso(days);
         await index.UpdateExpiryAsync(blobId, expiresAt, cancellationToken);
         blob.ExpiresAt = expiresAt;
-        return ServiceResult<FileInfoDto>.Success(blob.ToDto());
+        return ServiceResult<FileInfoDto>.Success(ToFileDto(blob));
     }
 
     public async Task<ServiceResult<FileInfoDto>> SetPinnedAsync(string blobId, bool pinned, CancellationToken cancellationToken)
@@ -366,12 +361,16 @@ public sealed class BlobService(
             return ServiceResult<FileInfoDto>.Fail(404, ErrorCodes.NotFound, "文件不存在或已过期");
         await index.SetPinnedAsync(blobId, pinned, cancellationToken);
         blob.Pinned = pinned;
-        return ServiceResult<FileInfoDto>.Success(blob.ToDto());
+        return ServiceResult<FileInfoDto>.Success(ToFileDto(blob));
     }
 
+    /// <summary>
+    /// 返回的 url 是**直链**：浏览器点开就直接下载，AI/脚本 curl 它就直接拿到字节。
+    /// 想看元数据（大小 / sha256 / 过期时间）的人可以另开 {publicBaseUrl}/f/{id} 的信息页。
+    /// </summary>
     public UploadResponse ToUploadResponse(BlobRecord blob) => new(
         blob.Id,
-        config.PublicUrl($"f/{blob.Id}"),
+        config.PublicUrl($"v1/blobs/{blob.Id}"),
         blob.Sha256,
         blob.Size,
         blob.ExpiresAt);

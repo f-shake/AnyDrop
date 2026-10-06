@@ -37,11 +37,12 @@ internal static class TestHttp
         Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
 
     public static async Task<UploadResponse> UploadOkAsync(
-        HttpClient client, string key, byte[] body, string? fileName = "a.txt", string? idempotencyKey = null,
-        string url = "/v1/blobs", string contentType = "application/octet-stream")
+        HttpClient client, string? key, byte[] body, string? fileName = "a.txt", string? idempotencyKey = null,
+        string url = "/v1/blobs", string contentType = "application/octet-stream", string? csrf = null)
     {
         var response = await client.SendAsync(
-            Upload(key, body, url: url, fileName: fileName, idempotencyKey: idempotencyKey, contentType: contentType));
+            Upload(key, body, url: url, fileName: fileName, idempotencyKey: idempotencyKey,
+                contentType: contentType, csrf: csrf));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var parsed = await response.Content.ReadFromJsonAsync<UploadResponse>();
         Assert.NotNull(parsed);

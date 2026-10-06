@@ -153,9 +153,10 @@ async function copyLink(item: QueueItem): Promise<void> {
   try {
     // 非安全上下文（局域网 http://）下 navigator.clipboard 不存在，直接抛异常走兜底
     await navigator.clipboard.writeText(item.result.url)
-    ElMessage.success('链接已复制')
+    ElMessage.success('直链已复制')
   } catch {
-    ElMessage.warning('当前环境不允许自动复制，请手动复制下面显示的链接')
+    // 这一条下面常驻显示着同一个 url，所以文案可以说「下面」；链接不会随 toast 消失
+    ElMessage.warning('当前环境不允许自动复制，请手动复制下面显示的直链')
   }
 }
 </script>
@@ -200,7 +201,7 @@ async function copyLink(item: QueueItem): Promise<void> {
             重试
           </el-button>
           <el-button v-else-if="item.status === 'done'" size="small" text @click="copyLink(item)">
-            复制链接
+            复制直链
           </el-button>
         </div>
         <el-progress v-if="item.status === 'uploading'" :percentage="item.percent" :stroke-width="6" />

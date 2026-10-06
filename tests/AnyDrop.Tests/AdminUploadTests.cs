@@ -8,7 +8,7 @@ namespace AnyDrop.Tests;
 
 /// <summary>
 /// 管理端浏览器上传（POST /api/admin/files）：只认管理员会话 + CSRF，不需要 Bearer 密钥，
-/// 不占用任何密钥的配额，落默认命名空间，用哨兵身份记账。
+/// 不占用任何密钥的配额，记账身份为空（不属于任何密钥）。
 /// </summary>
 public sealed class AdminUploadTests
 {
@@ -100,7 +100,7 @@ public sealed class AdminUploadTests
         Assert.Equal(body.Length, upload.Size);
         Assert.Equal(TestHttp.Sha256(body), upload.Sha256);
         Assert.True(Ids.IsBlobId(upload.Id));
-        Assert.EndsWith($"/f/{upload.Id}", upload.Url);
+        Assert.EndsWith($"/v1/blobs/{upload.Id}", upload.Url);
         Assert.True(File.Exists(app.BlobPath(upload.Id)));
 
         var list = await client.GetFromJsonAsync<FileListResponse>("/api/admin/files");
@@ -124,7 +124,7 @@ public sealed class AdminUploadTests
     }
 
     [Fact]
-    public async Task 落默认命名空间且记账身份是哨兵()
+    public async Task 管理员上传不记在任何密钥名下()
     {
         using var app = new TestApp();
         var (client, csrf) = await LoginAsync(app);
@@ -133,8 +133,7 @@ public sealed class AdminUploadTests
 
         var blob = await app.GetService<SqliteIndex>().GetBlobAsync(upload.Id, CancellationToken.None);
         Assert.NotNull(blob);
-        Assert.Equal(TokenService.DefaultNamespace, blob!.Namespace);
-        Assert.Equal(AdminUploadIdentity.TokenId, blob.TokenId);
+        Assert.Null(blob!.TokenId);
     }
 
     [Fact]
@@ -142,67 +141,72 @@ public sealed class AdminUploadTests
     {
         using var app = new TestApp();
         var (client, csrf) = await LoginAsync(app);
-        var (token, _) = await app.CreateTokenAsync();
+        var (token, key) = await app.CreateTokenAsync();
+        // 先让这把密钥有非零用量：否则「管理端上传后它仍是 0」在任何实现下都成立，是恒真的空断言
+        var owned = await TestHttp.UploadOkAsync(app.NewClient(), key, Encoding.UTF8.GetBytes("owned"));
+        var index = app.GetService<SqliteIndex>();
+        Assert.Equal(owned.Size, (await index.GetTokenAsync(token.Id, CancellationToken.None))!.UsedBytes);
 
         await UploadOkAsync(client, csrf, new byte[4096]);
 
-        var stored = await app.GetService<SqliteIndex>().GetTokenAsync(token.Id, CancellationToken.None);
-        Assert.Equal(0, stored!.UsedBytes);
+        // 精确不变：管理端上传若误记到某把密钥头上，这个非零值就会变
+        var stored = await index.GetTokenAsync(token.Id, CancellationToken.None);
+        Assert.Equal(owned.Size, stored!.UsedBytes);
     }
 
     [Fact]
-    public async Task 读密钥能取走管理员上传的文件()
+    public async Task 管理端上传带幂等键也不写幂等表()
+    {
+        // 记录既定取舍：管理端上传不参与幂等（没有密钥身份，既查不到也写不进去）。
+        // 这里专门带上 Idempotency-Key，把「token 为 null 时跳过幂等」那条分支真正走到：
+        // 将来若有人把它改成总是记账，这条用例会红。
+        using var app = new TestApp();
+        var (client, csrf) = await LoginAsync(app);
+        var body = Encoding.UTF8.GetBytes("same-body");
+
+        var first = await TestHttp.UploadOkAsync(client, key: null, body: body,
+            url: "/api/admin/files", fileName: null, idempotencyKey: "admin-idem-1", csrf: csrf);
+        var second = await TestHttp.UploadOkAsync(client, key: null, body: body,
+            url: "/api/admin/files", fileName: null, idempotencyKey: "admin-idem-1", csrf: csrf);
+
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.Equal(0, await app.CountIdempotencyAsync());
+    }
+
+    [Fact]
+    public async Task 无凭证即可取走管理员上传的文件()
     {
         using var app = new TestApp();
         var (client, csrf) = await LoginAsync(app);
-        var (_, readKey) = await app.CreateReadTokenAsync();
         var body = Encoding.UTF8.GetBytes("hand-off to reader 交付给读密钥");
 
         var upload = await UploadOkAsync(client, csrf, body, "handoff.bin");
 
-        // 必须用不带管理员 cookie 的客户端：否则请求同时带 admin 会话，IsAdmin 会绕过命名空间检查，
-        // 这条断言就变成永远成立的空测试。
-        var request = new HttpRequestMessage(HttpMethod.Get, $"/v1/blobs/{upload.Id}").WithBearer(readKey);
-        var response = await app.NewClient().SendAsync(request);
+        // 必须用不带管理员 cookie 的客户端：否则这条断言会靠 admin 会话成立，等于空测试。
+        var response = await app.NewClient().GetAsync($"/v1/blobs/{upload.Id}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(body, await response.Content.ReadAsByteArrayAsync());
     }
 
-    [Fact]
-    public async Task 异命名空间的读密钥读不到管理员上传的文件()
-    {
-        using var app = new TestApp();
-        var (client, csrf) = await LoginAsync(app);
-        var (_, otherKey) = await app.CreateReadTokenAsync(ns: "other");
-
-        var upload = await UploadOkAsync(client, csrf, Encoding.UTF8.GetBytes("x"));
-
-        var request = new HttpRequestMessage(HttpMethod.Get, $"/v1/blobs/{upload.Id}").WithBearer(otherKey);
-        var response = await app.NewClient().SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Equal(ErrorCodes.ScopeDenied, await TestHttp.ErrorCodeAsync(response));
-    }
-
     /// <summary>
-    /// 记录既有语义：命名空间是共享边界，删除权只看密钥自身的 canDelete，
-    /// 管理员上传的文件**不会**因此获得额外保护——要改这条语义必须先改设计。
+    /// 记录既有语义：上传密钥只有上传权，公共 DELETE 接口也已下线——
+    /// 删除只能由管理会话发起（见 AdminTests 的配额回退用例）。
     /// </summary>
     [Fact]
-    public async Task 同命名空间的可删密钥能删掉管理员上传的文件()
+    public async Task 上传密钥不能删除文件()
     {
         using var app = new TestApp();
         var (client, csrf) = await LoginAsync(app);
-        var (_, pullKey) = await app.CreateReadTokenAsync(canDelete: true);
+        var (_, writeKey) = await app.CreateTokenAsync();
 
         var upload = await UploadOkAsync(client, csrf, Encoding.UTF8.GetBytes("x"));
 
-        var request = new HttpRequestMessage(HttpMethod.Delete, $"/v1/blobs/{upload.Id}").WithBearer(pullKey);
+        var request = new HttpRequestMessage(HttpMethod.Delete, $"/v1/blobs/{upload.Id}").WithBearer(writeKey);
         var response = await app.NewClient().SendAsync(request);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Empty(StoredFiles(app));
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Single(StoredFiles(app));
     }
 
     [Fact]
@@ -277,8 +281,7 @@ public sealed class AdminUploadTests
         var audits = await app.GetService<SqliteIndex>().ListAuditAsync(50, CancellationToken.None);
 
         var row = Assert.Single(audits, a => a.Action == "blob.upload");
-        Assert.Equal(AdminUploadIdentity.TokenId, row.TokenId);
-        Assert.Equal(TokenService.DefaultNamespace, row.Namespace);
+        Assert.Null(row.TokenId);
         Assert.Equal(upload.Id, row.BlobId);
         Assert.Equal("审计.txt", row.Detail);
     }

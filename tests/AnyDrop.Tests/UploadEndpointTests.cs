@@ -25,7 +25,7 @@ public sealed class UploadEndpointTests
         Assert.Equal(body.Length, upload.Size);
         Assert.Equal(Sha256(body), upload.Sha256);
         Assert.True(Ids.IsBlobId(upload.Id));
-        Assert.EndsWith($"/f/{upload.Id}", upload.Url);
+        Assert.EndsWith($"/v1/blobs/{upload.Id}", upload.Url);
         Assert.True(Time.TryParse(upload.ExpiresAt, out _));
         Assert.True(File.Exists(app.BlobPath(upload.Id)));
 
@@ -57,19 +57,6 @@ public sealed class UploadEndpointTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Equal(ErrorCodes.InvalidToken, await TestHttp.ErrorCodeAsync(response));
-    }
-
-    [Fact]
-    public async Task 只读密钥上传返回403()
-    {
-        using var app = new TestApp();
-        var (_, readKey) = await app.CreateReadTokenAsync();
-        var client = app.NewClient();
-
-        var response = await client.SendAsync(TestHttp.Upload(readKey, Encoding.UTF8.GetBytes("x")));
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Equal(ErrorCodes.ScopeDenied, await TestHttp.ErrorCodeAsync(response));
     }
 
     [Fact]
@@ -262,14 +249,12 @@ public sealed class UploadEndpointTests
     {
         using var app = new TestApp();
         var (_, writeKey) = await app.CreateTokenAsync();
-        var (_, deleteKey) = await app.CreateReadTokenAsync(canDelete: true);
         var client = app.NewClient();
         var body = Encoding.UTF8.GetBytes("retry-after-delete");
 
         var first = await TestHttp.UploadOkAsync(client, writeKey, body, idempotencyKey: "retry-2");
-        var delete = await client.SendAsync(
-            new HttpRequestMessage(HttpMethod.Delete, $"/v1/blobs/{first.Id}").WithBearer(deleteKey));
-        Assert.Equal(HttpStatusCode.OK, delete.StatusCode);
+        // 删除接口已是管理端专属（见 AdminTests），本用例只关心「幂等键指向的 blob 不在了」这个状态
+        Assert.True(await app.GetService<SqliteIndex>().DeleteBlobAsync(first.Id));
 
         var second = await TestHttp.UploadOkAsync(client, writeKey, body, idempotencyKey: "retry-2");
 

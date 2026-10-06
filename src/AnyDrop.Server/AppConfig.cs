@@ -9,7 +9,6 @@ public sealed class ServerOptions
     public string Urls { get; set; } = "http://127.0.0.1:8790";
     public long MaxUploadBytes { get; set; } = 256L * 1024 * 1024;
     public int MaxConcurrentUploads { get; set; } = 4;
-    public int SessionDays { get; set; } = 30;
     public bool CookieSecure { get; set; } = true;
 }
 
@@ -70,8 +69,6 @@ public sealed class AppConfig
 
     public string PublicUrl(string relative) =>
         $"{Server.PublicBaseUrl.TrimEnd('/')}/{relative.TrimStart('/')}";
-
-    public Uri PublicUri(string relative) => new(PublicUrl(relative), UriKind.Absolute);
 }
 
 public static class ConfigLoader
@@ -85,7 +82,6 @@ public static class ConfigLoader
             Urls = Str(c, "server:urls", "http://127.0.0.1:8790"),
             MaxUploadBytes = Long(c, "server:maxUploadBytes", 256L * 1024 * 1024),
             MaxConcurrentUploads = Int(c, "server:maxConcurrentUploads", 4),
-            SessionDays = Int(c, "server:sessionDays", 30),
             CookieSecure = Bool(c, "server:cookieSecure", true),
         };
         var storage = new StorageOptions
@@ -131,8 +127,6 @@ public static class ConfigLoader
             throw new InvalidOperationException("retention:defaultTtlDays 必须在 1 到 3650 之间");
         if (retention.GcIntervalMinutes is < 1 or > 1440)
             throw new InvalidOperationException("retention:gcIntervalMinutes 必须在 1 到 1440 之间");
-        if (server.SessionDays is < 1 or > 365)
-            throw new InvalidOperationException("server:sessionDays 必须在 1 到 365 之间");
         if (security.MaxLoginFailures is < 1 or > 1000)
             throw new InvalidOperationException("security:maxLoginFailures 必须在 1 到 1000 之间");
         if (security.LockoutMinutes is < 1 or > 1440)

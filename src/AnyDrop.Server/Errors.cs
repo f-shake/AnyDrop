@@ -4,7 +4,6 @@ public static class ErrorCodes
 {
     public const string InvalidToken = "invalid_token";
     public const string TokenExpired = "token_expired";
-    public const string ScopeDenied = "scope_denied";
     public const string NotFound = "not_found";
     public const string IdempotencyConflict = "idempotency_conflict";
     public const string FileTooLarge = "file_too_large";
@@ -51,17 +50,8 @@ public static class ApiErrors
         Results.Json(new ApiErrorEnvelope(new ApiError(code, message)),
             AppJsonContext.Default.ApiErrorEnvelope, statusCode: status);
 
-    public static IResult NotFound() => Json(404, ErrorCodes.NotFound, "文件不存在或已过期");
-
     public static IResult FileTooLarge(long maxBytes) =>
         Json(413, ErrorCodes.FileTooLarge, $"文件超过上限（最大 {maxBytes / (1024 * 1024)} MiB）");
 
     public static IResult BadRequest(string message) => Json(400, ErrorCodes.BadRequest, message);
-
-    public static IResult DiskLow() =>
-        Json(507, ErrorCodes.DiskLow, "服务器空间不足，暂时拒绝写入");
-
-    public static IResult IntegrityError() => Json(500, ErrorCodes.IntegrityError, "文件数据校验失败");
-
-    public static IResult ServerError() => Json(500, ErrorCodes.InternalError, "服务内部错误");
 }

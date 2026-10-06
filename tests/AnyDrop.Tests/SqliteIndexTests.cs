@@ -1,4 +1,5 @@
 using AnyDrop.Server;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -28,23 +29,19 @@ public sealed class SqliteIndexTests : IDisposable
         return index;
     }
 
-    private static TokenRecord NewToken(string ns = "default", bool canUpload = true, bool canRead = false, bool canDelete = false) => new()
+    private static TokenRecord NewToken() => new()
     {
         Id = Ids.NewTokenId(),
         Name = "t",
         KeyHash = SecretHasher.Sha256Hex("ad_" + Guid.NewGuid().ToString("N")),
         KeyPrefix = "ad_ABCDEF",
-        Namespace = ns,
-        CanUpload = canUpload,
-        CanRead = canRead,
-        CanDelete = canDelete,
         MaxFileBytes = 1024,
         QuotaBytes = 8192,
         CreatedAt = Time.NowIso(),
         ExpiresAt = Time.AddDaysIso(30),
     };
 
-    private static BlobRecord NewBlob(string tokenId, string ns = "default", long size = 100, string? expiresAt = null) => new()
+    private static BlobRecord NewBlob(string? tokenId, long size = 100, string? expiresAt = null) => new()
     {
         Id = Ids.NewBlobId(),
         Name = "file.txt",
@@ -58,7 +55,6 @@ public sealed class SqliteIndexTests : IDisposable
         WrappedDek = new byte[48],
         DekNonce = new byte[12],
         TokenId = tokenId,
-        Namespace = ns,
         CreatedAt = Time.NowIso(),
         ExpiresAt = expiresAt ?? Time.AddDaysIso(30),
     };
@@ -72,6 +68,41 @@ public sealed class SqliteIndexTests : IDisposable
     }
 
     [Fact]
+    public async Task 初始化后写入结构版本()
+    {
+        await NewIndexAsync();
+
+        await using var connection = new SqliteConnection($"Data Source={Config.DbPath}");
+        await connection.OpenAsync();
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version";
+        Assert.Equal(SqliteIndex.SchemaVersion, Convert.ToInt32(await cmd.ExecuteScalarAsync()));
+    }
+
+    [Fact]
+    public async Task 旧结构的数据库拒绝启动()
+    {
+        // 手搓一个 v1 时代的库：建了 tokens 表（还带着 scope_namespace 列），但没有 user_version
+        var dbPath = Config.DbPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        await using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+        {
+            await connection.OpenAsync();
+            await using var create = connection.CreateCommand();
+            create.CommandText = "CREATE TABLE tokens (id TEXT PRIMARY KEY, scope_namespace TEXT NOT NULL)";
+            await create.ExecuteNonQueryAsync();
+        }
+
+        var index = new SqliteIndex(Config, NullLogger<SqliteIndex>.Instance);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => index.InitializeAsync());
+
+        // 报错必须点名路径与版本，而不是「先建表、写到一半才炸」
+        Assert.Contains("结构版本不匹配", ex.Message);
+        Assert.Contains(dbPath, ex.Message);
+        Assert.Contains($"v{SqliteIndex.SchemaVersion}", ex.Message);
+    }
+
+    [Fact]
     public async Task token的增查改与用量重算()
     {
         var index = await NewIndexAsync();
@@ -80,9 +111,10 @@ public sealed class SqliteIndexTests : IDisposable
 
         var loaded = await index.GetTokenAsync(token.Id);
         Assert.NotNull(loaded);
-        Assert.Equal(token.Namespace, loaded!.Namespace);
-        Assert.True(loaded.CanUpload);
-        Assert.False(loaded.CanRead);
+        Assert.Equal(token.Name, loaded!.Name);
+        Assert.Equal(token.MaxFileBytes, loaded.MaxFileBytes);
+        Assert.Equal(token.QuotaBytes, loaded.QuotaBytes);
+        Assert.False(loaded.IsRevoked);
 
         Assert.NotNull(await index.FindTokenByHashAsync(token.KeyHash));
         Assert.Null(await index.FindTokenByHashAsync("deadbeef"));
@@ -194,8 +226,8 @@ public sealed class SqliteIndexTests : IDisposable
     public async Task 审计写入与读取()
     {
         var index = await NewIndexAsync();
-        await index.InsertAuditAsync("blob.upload", "t1", "b1", "default", "1.2.3.4", 123, "name.txt");
-        await index.InsertAuditAsync("blob.download", "t1", "b1", "default", "1.2.3.4", 123, null);
+        await index.InsertAuditAsync("blob.upload", "t1", "b1", "1.2.3.4", 123, "name.txt");
+        await index.InsertAuditAsync("blob.download", "t1", "b1", "1.2.3.4", 123, null);
 
         var items = await index.ListAuditAsync(10);
         Assert.Equal(2, items.Count);

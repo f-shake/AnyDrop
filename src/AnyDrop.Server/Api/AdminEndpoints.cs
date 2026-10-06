@@ -4,9 +4,6 @@ public static class AdminEndpoints
 {
     public static void MapAdminEndpoints(this WebApplication app)
     {
-        app.MapPost("/api/session", CreateSessionAsync);
-        app.MapDelete("/api/session", DeleteSessionAsync);
-
         app.MapGet("/api/admin/session", GetSessionState);
         app.MapPost("/api/admin/login", LoginAsync);
         app.MapPost("/api/admin/logout", LogoutAsync);
@@ -30,44 +27,13 @@ public static class AdminEndpoints
     private static IResult CsrfFailed() =>
         ApiErrors.Json(403, ErrorCodes.CsrfFailed, "CSRF 校验失败，请刷新页面后重试");
 
-    /// <summary>凭读取密钥建立下载会话（供脚本/AI 用；下载页用的是 /f/{id} 表单）。</summary>
-    private static async Task<IResult> CreateSessionAsync(
-        HttpContext context, AppConfig config, TokenService tokens, SessionStore sessions, RateLimiter limiter, IpAccessor ipAccessor)
-    {
-        var cancellationToken = context.RequestAborted;
-        var ip = ipAccessor.Get(context);
-        if (!limiter.IsAllowed($"dlsession:{ip}", perMinute: 10))
-            return ApiErrors.Json(429, ErrorCodes.RateLimited, "请求过于频繁，请稍后重试");
-
-        var request = await HttpJson.TryReadAsync(context.Request, AppJsonContext.Default.SessionRequest, cancellationToken);
-        if (request is null) return ApiErrors.BadRequest("请求体必须是 JSON");
-
-        var auth = await tokens.AuthenticateAsync(request.Key, cancellationToken);
-        if (!auth.Ok) return ApiErrors.From(auth.Failure!.Value);
-        var token = auth.Value!;
-        if (!token.CanRead) return ApiErrors.Json(403, ErrorCodes.ScopeDenied, "该密钥无权下载文件");
-
-        var session = sessions.CreateDownload(token);
-        AuthCookies.Append(context, CookieNames.Download, session.Id, session.ExpiresAt, config);
-        return HttpJson.Json(
-            new SessionResponse("download", session.Namespace, Time.Iso(session.ExpiresAt)),
-            AppJsonContext.Default.SessionResponse);
-    }
-
-    private static IResult DeleteSessionAsync(HttpContext context, AppConfig config, SessionStore sessions)
-    {
-        sessions.RemoveDownload(context.Request.Cookies[CookieNames.Download]);
-        AuthCookies.Delete(context, CookieNames.Download, config);
-        return HttpJson.Json(new SimpleStatusResponse("logged_out", null), AppJsonContext.Default.SimpleStatusResponse);
-    }
-
     private static IResult GetSessionState(HttpContext context, SessionStore sessions)
     {
         var admin = Admin(context, sessions);
         return HttpJson.Json(
             admin is null
-                ? new SessionStateResponse(false, null, null, null)
-                : new SessionStateResponse(true, "admin", null, admin.Csrf),
+                ? new SessionStateResponse(false, null, null)
+                : new SessionStateResponse(true, "admin", admin.Csrf),
             AppJsonContext.Default.SessionStateResponse);
     }
 
@@ -144,7 +110,7 @@ public static class AdminEndpoints
         var admin = Admin(context, sessions);
         if (admin is null) return NotLoggedIn();
         if (!AdminAuth.CheckCsrf(context, admin)) return CsrfFailed();
-        var result = await blobs.DeleteAsync(id, null, isAdmin: true, ipAccessor.Get(context), context.RequestAborted);
+        var result = await blobs.DeleteAsync(id, ipAccessor.Get(context), context.RequestAborted);
         return result.Ok
             ? HttpJson.Json(new SimpleStatusResponse("deleted", id), AppJsonContext.Default.SimpleStatusResponse)
             : ApiErrors.From(result.Failure!.Value);
@@ -208,7 +174,7 @@ public static class AdminEndpoints
         if (!Ids.IsTokenId(id)) return ApiErrors.Json(404, ErrorCodes.NotFound, "token 不存在");
         var revoked = await index.RevokeTokenAsync(id, Time.NowIso(), context.RequestAborted);
         if (!revoked) return ApiErrors.Json(404, ErrorCodes.NotFound, "token 不存在或已撤销");
-        await index.InsertAuditAsync("token.revoke", id, null, null, ipAccessor.Get(context), null, null, context.RequestAborted);
+        await index.InsertAuditAsync("token.revoke", id, null, ipAccessor.Get(context), null, null, context.RequestAborted);
         return HttpJson.Json(new SimpleStatusResponse("revoked", id), AppJsonContext.Default.SimpleStatusResponse);
     }
 

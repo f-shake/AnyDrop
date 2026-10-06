@@ -4,41 +4,6 @@ using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace AnyDrop.Server;
 
-public sealed record RequestAuth(TokenRecord? Token, DownloadSession? Session, AdminSession? Admin)
-{
-    public bool IsAdmin => Admin is not null;
-
-    /// <summary>把下载会话当作只读 token 使用，复用同一套权限判断。</summary>
-    public TokenRecord? EffectiveToken =>
-        Token is not null ? Token
-        : Session is null ? null
-        : new TokenRecord
-        {
-            Id = Session.TokenId,
-            Namespace = Session.Namespace,
-            CanRead = true,
-            CanDelete = Session.CanDelete,
-        };
-}
-
-public static class RequestAuthResolver
-{
-    public static async Task<ServiceResult<RequestAuth>> ResolveAsync(
-        HttpContext context, TokenService tokens, SessionStore sessions, CancellationToken cancellationToken)
-    {
-        TokenRecord? token = null;
-        if (context.Request.Headers.TryGetValue("Authorization", out var header))
-        {
-            var result = await tokens.AuthenticateAsync(header.ToString(), cancellationToken);
-            if (!result.Ok) return ServiceResult<RequestAuth>.Fail(result.Failure!.Value);
-            token = result.Value;
-        }
-        var session = sessions.GetDownload(context.Request.Cookies[CookieNames.Download]);
-        var admin = sessions.GetAdmin(context.Request.Cookies[CookieNames.Admin]);
-        return ServiceResult<RequestAuth>.Success(new RequestAuth(token, session, admin));
-    }
-}
-
 public static class BlobEndpoints
 {
     private const int MaxFileNameLength = 200;
@@ -46,25 +11,21 @@ public static class BlobEndpoints
     public static void MapBlobEndpoints(this WebApplication app)
     {
         app.MapPost("/v1/blobs", UploadAsync);
+        // 上传要密钥，下载不要；删除接口随之取消（传错了由管理面板删）。
         app.MapMethods("/v1/blobs/{id}", ["GET", "HEAD"], DownloadAsync);
-        app.MapDelete("/v1/blobs/{id}", DeleteAsync);
     }
 
     private static async Task<IResult> UploadAsync(
         HttpContext context,
-        AppConfig config,
         TokenService tokens,
         BlobService blobs,
-        SessionStore sessions,
         RateLimiter limiter,
         IpAccessor ipAccessor)
     {
         var cancellationToken = context.RequestAborted;
-        var auth = await RequestAuthResolver.ResolveAsync(context, tokens, sessions, cancellationToken);
+        var auth = await tokens.AuthenticateAsync(context.Request.Headers.Authorization.ToString(), cancellationToken);
         if (!auth.Ok) return ApiErrors.From(auth.Failure!.Value);
-        var token = auth.Value!.Token;
-        if (token is null)
-            return ApiErrors.Json(401, ErrorCodes.InvalidToken, "缺少 Authorization: Bearer 密钥");
+        var token = auth.Value!;
         if (!limiter.IsAllowed($"upload:{token.Id}"))
             return ApiErrors.Json(429, ErrorCodes.RateLimited, "请求过于频繁，请稍后重试");
 
@@ -119,24 +80,18 @@ public static class BlobEndpoints
         }
     }
 
+    /// <summary>
+    /// 下载不校验任何身份：blob id 本身就是下载凭证。
+    /// 这里只负责 Range、响应头与流式输出。
+    /// </summary>
     private static async Task<IResult> DownloadAsync(
         HttpContext context,
         string id,
-        AppConfig config,
-        TokenService tokens,
         BlobService blobs,
-        SessionStore sessions,
         IpAccessor ipAccessor)
     {
         var cancellationToken = context.RequestAborted;
-        var auth = await RequestAuthResolver.ResolveAsync(context, tokens, sessions, cancellationToken);
-        if (!auth.Ok) return ApiErrors.From(auth.Failure!.Value);
-        var current = auth.Value!;
-        var effectiveToken = current.EffectiveToken;
-        if (!current.IsAdmin && effectiveToken is null)
-            return ApiErrors.Json(401, ErrorCodes.InvalidToken, "缺少 Authorization: Bearer 密钥");
-
-        var opened = await blobs.OpenDownloadAsync(id, effectiveToken, current.IsAdmin, cancellationToken);
+        var opened = await blobs.OpenDownloadAsync(id, cancellationToken);
         if (!opened.Ok) return ApiErrors.From(opened.Failure!.Value);
 
         var handle = opened.Value!;
@@ -167,6 +122,9 @@ public static class BlobEndpoints
         response.Headers["X-File-Sha256"] = handle.Blob.Sha256;
         response.Headers["Content-Disposition"] = ContentDisposition(handle.Blob);
         response.Headers.CacheControl = "private, no-store";
+        // 链接本身就是凭证：别让 id 顺着 Referer 漏给下游，也别让爬虫把它收进索引。
+        response.Headers["Referrer-Policy"] = "no-referrer";
+        response.Headers["X-Robots-Tag"] = "noindex, nofollow";
         if (isPartial)
             response.Headers.ContentRange = $"bytes {start}-{start + length - 1}/{handle.Blob.Size}";
 
@@ -194,24 +152,6 @@ public static class BlobEndpoints
     }
 
     private static readonly IResult NoOp = new NoOpResult();
-
-    private static async Task<IResult> DeleteAsync(
-        HttpContext context,
-        string id,
-        TokenService tokens,
-        BlobService blobs,
-        SessionStore sessions,
-        IpAccessor ipAccessor)
-    {
-        var cancellationToken = context.RequestAborted;
-        var auth = await RequestAuthResolver.ResolveAsync(context, tokens, sessions, cancellationToken);
-        if (!auth.Ok) return ApiErrors.From(auth.Failure!.Value);
-        var current = auth.Value!;
-        var result = await blobs.DeleteAsync(id, current.EffectiveToken, current.IsAdmin, ipAccessor.Get(context), cancellationToken);
-        return result.Ok
-            ? HttpJson.Json(new SimpleStatusResponse("deleted", id), AppJsonContext.Default.SimpleStatusResponse)
-            : ApiErrors.From(result.Failure!.Value);
-    }
 
     public static string ContentDisposition(BlobRecord blob)
     {

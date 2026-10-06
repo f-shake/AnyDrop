@@ -66,8 +66,9 @@ public sealed class GcService(
             // 条件删除：pin 与回收并发时，删不到行就绝不能删文件（管理员刚点过「保留」）。
             if (!await index.DeleteExpiredBlobAsync(blob.Id, cancellationToken)) continue;
             store.Delete(blob.CipherPath);
-            await index.InsertAuditAsync("blob.expire", blob.TokenId, blob.Id, blob.Namespace, null, blob.Size, null, cancellationToken);
-            touchedTokens.Add(blob.TokenId);
+            await index.InsertAuditAsync("blob.expire", blob.TokenId, blob.Id, null, blob.Size, null, cancellationToken);
+            // 管理员上传的文件不属于任何密钥（TokenId 为 null），只回算真实密钥的用量。
+            if (blob.TokenId is not null) touchedTokens.Add(blob.TokenId);
             deleted++;
         }
         foreach (var tokenId in touchedTokens)

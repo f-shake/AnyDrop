@@ -40,6 +40,22 @@ function download(row: FileInfoDto) {
   window.open(apiUrl(`/v1/blobs/${row.id}`), '_blank', 'noopener')
 }
 
+async function copyLink(row: FileInfoDto) {
+  try {
+    // 非安全上下文（局域网 http://）下 navigator.clipboard 不存在，直接抛异常走兜底
+    await navigator.clipboard.writeText(row.url)
+    ElMessage.success('直链已复制')
+  } catch {
+    // 兜底不能用 ElMessage：它默认 3 秒就销毁（只有 hover 才暂停），用户来不及选中，
+    // 触屏上更是拿不到链接。改成占住屏幕、链接是可选中纯文本的弹窗。
+    try {
+      await ElMessageBox.alert(row.url, '请手动复制直链', { confirmButtonText: '知道了' })
+    } catch {
+      // 关掉弹窗即可，无需额外处理
+    }
+  }
+}
+
 async function remove(row: FileInfoDto) {
   try {
     await ElMessageBox.confirm(`确定删除「${row.name ?? row.id}」？删除后无法恢复。`, '删除确认', {
@@ -116,7 +132,6 @@ defineExpose({ reload })
       <el-table-column label="大小" width="100">
         <template #default="{ row }">{{ humanSize(row.size) }}</template>
       </el-table-column>
-      <el-table-column label="命名空间" width="110" prop="namespace" />
       <el-table-column label="上传时间" width="160" prop="createdAt" />
       <el-table-column label="过期时间" width="160">
         <template #default="{ row }">
@@ -125,8 +140,9 @@ defineExpose({ reload })
         </template>
       </el-table-column>
       <el-table-column label="下载" width="70" prop="downloadCount" />
-      <el-table-column label="操作" width="240" fixed="right">
+      <el-table-column label="操作" width="310" fixed="right">
         <template #default="{ row }">
+          <el-button link type="primary" @click="copyLink(row as FileInfoDto)">复制直链</el-button>
           <el-button link type="primary" @click="download(row as FileInfoDto)">下载</el-button>
           <el-button link type="primary" @click="openExpiry(row as FileInfoDto)">改期</el-button>
           <el-button link type="primary" @click="togglePin(row as FileInfoDto)">{{ row.pinned ? '取消保留' : '保留' }}</el-button>

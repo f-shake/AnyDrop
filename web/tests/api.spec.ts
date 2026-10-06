@@ -54,13 +54,13 @@ describe('api 客户端', () => {
   it('把错误信封解析成 ApiError', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => jsonResponse({ error: { code: 'scope_denied', message: '该密钥无权下载文件' } }, 403)),
+      vi.fn(async () => jsonResponse({ error: { code: 'invalid_token', message: '密钥无效或已撤销' } }, 401)),
     )
 
     const error = await api('/api/admin/files').catch((e: unknown) => e)
 
     expect(error).toBeInstanceOf(ApiError)
-    expect(error).toMatchObject({ code: 'scope_denied', status: 403, message: '该密钥无权下载文件' })
+    expect(error).toMatchObject({ code: 'invalid_token', status: 401, message: '密钥无效或已撤销' })
   })
 
   it('写操作带上 JSON 与 CSRF 头', async () => {
@@ -93,7 +93,7 @@ describe('api 客户端', () => {
   it('空响应体不抛解析错误', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 200 })))
 
-    await expect(api('/api/session')).resolves.toBeUndefined()
+    await expect(api('/api/admin/tokens')).resolves.toBeUndefined()
   })
 
   it('非 JSON 错误响应有兜底文案', async () => {

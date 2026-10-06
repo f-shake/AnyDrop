@@ -9,7 +9,6 @@ public static class PageEndpoints
     public static void MapPageEndpoints(this WebApplication app)
     {
         app.MapGet("/f/{id}", GetDownloadPageAsync);
-        app.MapPost("/f/{id}", SubmitKeyAsync);
         // 必须显式映射：MapFallback 的模板带 :nonfile 约束，带扩展名的请求压根不会进兜底处理器。
         app.MapGet("/assets/{**path}", ServeAssetAsync);
         app.MapFallback(FallbackAsync);
@@ -26,74 +25,23 @@ public static class PageEndpoints
         context.Response.StatusCode = StatusCodes.Status404NotFound;
     }
 
+    /// <summary>
+    /// 下载页不需要任何身份：id 就是凭证。取不到就是 404，不再有输密钥的表单。
+    /// </summary>
     private static async Task GetDownloadPageAsync(
         HttpContext context,
         string id,
         AppConfig config,
-        BlobService blobs,
-        SessionStore sessions)
+        BlobService blobs)
     {
         var cancellationToken = context.RequestAborted;
-        var admin = sessions.GetAdmin(context.Request.Cookies[CookieNames.Admin]);
-        var session = sessions.GetDownload(context.Request.Cookies[CookieNames.Download]);
-        var effective = ToToken(session);
-
-        if (admin is not null || effective is not null)
-        {
-            var info = await blobs.GetFileInfoAsync(id, effective, admin is not null, cancellationToken);
-            if (info.Ok)
-            {
-                await WriteHtmlAsync(context, RenderFileCard(info.Value!, config));
-                return;
-            }
-        }
-
-        await WriteHtmlAsync(context, RenderKeyForm(id, config, null));
-    }
-
-    private static async Task SubmitKeyAsync(
-        HttpContext context,
-        string id,
-        AppConfig config,
-        TokenService tokens,
-        BlobService blobs,
-        SessionStore sessions,
-        RateLimiter limiter,
-        IpAccessor ipAccessor)
-    {
-        var cancellationToken = context.RequestAborted;
-        var ip = ipAccessor.Get(context);
-        if (!limiter.IsAllowed($"dlkey:{ip}", perMinute: 10))
-        {
-            await WriteHtmlAsync(context, RenderKeyForm(id, config, "尝试过于频繁，请稍后重试"), StatusCodes.Status429TooManyRequests);
-            return;
-        }
-        if (!context.Request.HasFormContentType)
-        {
-            await WriteHtmlAsync(context, RenderKeyForm(id, config, "请求格式不正确"), StatusCodes.Status400BadRequest);
-            return;
-        }
-
-        var form = await context.Request.ReadFormAsync(cancellationToken);
-        var key = form["key"].ToString();
-        var auth = await tokens.AuthenticateAsync(key, cancellationToken);
-        if (!auth.Ok)
-        {
-            await WriteHtmlAsync(context, RenderKeyForm(id, config, auth.Failure!.Value.Message), StatusCodes.Status401Unauthorized);
-            return;
-        }
-
-        var token = auth.Value!;
-        var info = await blobs.GetFileInfoAsync(id, token, false, cancellationToken);
+        var info = await blobs.GetFileInfoAsync(id, cancellationToken);
         if (!info.Ok)
         {
-            await WriteHtmlAsync(context, RenderKeyForm(id, config, "密钥无效，或该文件不存在"), StatusCodes.Status401Unauthorized);
+            await WriteHtmlAsync(context, RenderNotFound(), StatusCodes.Status404NotFound);
             return;
         }
-
-        var session = sessions.CreateDownload(token);
-        AuthCookies.Append(context, CookieNames.Download, session.Id, session.ExpiresAt, config);
-        context.Response.Redirect($"{config.PathBase}/f/{id}", permanent: false);
+        await WriteHtmlAsync(context, RenderFileCard(info.Value!, config));
     }
 
     private static async Task FallbackAsync(HttpContext context, AppConfig config, WebAssetStore assets)
@@ -128,15 +76,6 @@ public static class PageEndpoints
     private static bool AcceptsHtml(HttpRequest request) =>
         request.Headers.Accept.ToString().Contains("text/html", StringComparison.OrdinalIgnoreCase);
 
-    private static TokenRecord? ToToken(DownloadSession? session) => session is null        ? null
-        : new TokenRecord
-        {
-            Id = session.TokenId,
-            Namespace = session.Namespace,
-            CanRead = true,
-            CanDelete = session.CanDelete,
-        };
-
     private static async Task WriteAssetAsync(HttpContext context, byte[] content, string contentType, bool immutable)
     {
         context.Response.StatusCode = StatusCodes.Status200OK;
@@ -154,6 +93,9 @@ public static class PageEndpoints
         context.Response.StatusCode = status;
         context.Response.ContentType = "text/html; charset=utf-8";
         context.Response.Headers.CacheControl = "no-store";
+        // 页面地址里就带着下载凭证：别让它顺着 Referer 漏出去，也别被索引。
+        context.Response.Headers["Referrer-Policy"] = "no-referrer";
+        context.Response.Headers["X-Robots-Tag"] = "noindex, nofollow";
         await context.Response.WriteAsync(html, context.RequestAborted);
     }
 
@@ -165,22 +107,10 @@ public static class PageEndpoints
             $"{{\"error\":{{\"code\":\"{code}\",\"message\":\"{message}\"}}}}", context.RequestAborted);
     }
 
-    public static string RenderKeyForm(string id, AppConfig config, string? error)
-    {
-        var safeId = WebUtility.HtmlEncode(id);
-        var errorBlock = error is null ? "" : $"<p class=\"error\">{WebUtility.HtmlEncode(error)}</p>";
-        var content = $"""
-            <h1>需要读取密钥</h1>
-            <p>文件 <span class="hash">{safeId}</span> 受密钥保护。</p>
-            <form method="post" action="{config.PathBase}/f/{safeId}">
-              <label for="key">读取密钥</label>
-              <input id="key" name="key" type="password" autocomplete="off" required autofocus>
-              <button type="submit">验证并继续</button>
-            </form>
-            {errorBlock}
-            """;
-        return PageTemplates.Render(PageTemplates.DownloadPath, content);
-    }
+    public static string RenderNotFound() => PageTemplates.Render(PageTemplates.DownloadPath, """
+        <h1>文件不存在或已过期</h1>
+        <p>这个链接对应的文件已经不在了。请向给你链接的人确认，或让他重新上传。</p>
+        """);
 
     public static string RenderFileCard(BlobRecord blob, AppConfig config)
     {

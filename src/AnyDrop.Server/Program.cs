@@ -35,7 +35,16 @@ builder.Services.AddHostedService<GcService>();
 
 var app = builder.Build();
 
-await app.Services.GetRequiredService<SqliteIndex>().InitializeAsync();
+// 结构版本不匹配（旧库）时给一条可操作的提示，而不是一坨堆栈。
+try
+{
+    await app.Services.GetRequiredService<SqliteIndex>().InitializeAsync();
+}
+catch (InvalidOperationException ex)
+{
+    app.Logger.LogCritical("{Message}", ex.Message);
+    return 1;
+}
 _ = app.Services.GetRequiredService<KeyRing>();
 var assets = app.Services.GetRequiredService<WebAssetStore>();
 

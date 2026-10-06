@@ -11,18 +11,18 @@ export interface AdminLoginResponse {
 export interface SessionStateResponse {
   authenticated: boolean
   kind?: string | null
-  namespace?: string | null
   csrfToken?: string | null
 }
 
 export interface FileInfoDto {
   id: string
+  /** 直链：{publicBaseUrl}/v1/blobs/{id}。人点开即下载，AI/脚本 curl 即取到字节。 */
+  url: string
   name?: string | null
   size: number
   sha256: string
   contentType?: string | null
-  namespace: string
-  tokenId: string
+  tokenId?: string | null
   createdAt: string
   expiresAt: string
   pinned: boolean
@@ -40,10 +40,6 @@ export interface TokenDto {
   id: string
   name: string
   keyPrefix: string
-  namespace: string
-  canUpload: boolean
-  canRead: boolean
-  canDelete: boolean
   maxFileBytes: number
   quotaBytes: number
   usedBytes: number
@@ -59,11 +55,6 @@ export interface TokenListResponse {
 
 export interface CreateTokenRequest {
   name: string
-  preset?: string | null
-  namespace?: string | null
-  canUpload?: boolean | null
-  canRead?: boolean | null
-  canDelete?: boolean | null
   ttlDays?: number | null
   quotaBytes?: number | null
   maxFileBytes?: number | null
@@ -80,7 +71,6 @@ export interface AuditDto {
   action: string
   tokenId?: string | null
   blobId?: string | null
-  namespace?: string | null
   ip?: string | null
   bytes?: number | null
   detail?: string | null

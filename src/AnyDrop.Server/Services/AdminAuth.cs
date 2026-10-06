@@ -5,7 +5,6 @@ namespace AnyDrop.Server;
 
 public static class CookieNames
 {
-    public const string Download = "anydrop_dl";
     public const string Admin = "anydrop_admin";
 }
 
@@ -38,15 +37,6 @@ public static class AuthCookies
         });
 }
 
-public sealed class DownloadSession
-{
-    public string Id { get; init; } = "";
-    public string TokenId { get; init; } = "";
-    public string Namespace { get; init; } = "";
-    public bool CanDelete { get; init; }
-    public DateTimeOffset ExpiresAt { get; init; }
-}
-
 public sealed class AdminSession
 {
     public string Id { get; init; } = "";
@@ -56,42 +46,10 @@ public sealed class AdminSession
     public DateTimeOffset ExpiresAt { get; init; }
 }
 
-/// <summary>进程内会话存储（下载会话与超管会话）。重启即失效，单实例部署。</summary>
-public sealed class SessionStore(AppConfig config)
+/// <summary>进程内超管会话存储。重启即失效，单实例部署。</summary>
+public sealed class SessionStore
 {
-    private readonly ConcurrentDictionary<string, DownloadSession> _downloads = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AdminSession> _admins = new(StringComparer.Ordinal);
-
-    public DownloadSession CreateDownload(TokenRecord token)
-    {
-        var session = new DownloadSession
-        {
-            Id = Ids.NewSessionId(),
-            TokenId = token.Id,
-            Namespace = token.Namespace,
-            CanDelete = token.CanDelete,
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(config.Server.SessionDays),
-        };
-        _downloads[session.Id] = session;
-        Prune();
-        return session;
-    }
-
-    public DownloadSession? GetDownload(string? id)
-    {
-        if (string.IsNullOrEmpty(id) || !_downloads.TryGetValue(id, out var session)) return null;
-        if (session.ExpiresAt <= DateTimeOffset.UtcNow)
-        {
-            _downloads.TryRemove(id, out _);
-            return null;
-        }
-        return session;
-    }
-
-    public void RemoveDownload(string? id)
-    {
-        if (!string.IsNullOrEmpty(id)) _downloads.TryRemove(id, out _);
-    }
 
     public AdminSession CreateAdmin(string username, string ip)
     {
@@ -127,8 +85,6 @@ public sealed class SessionStore(AppConfig config)
     private void Prune()
     {
         var now = DateTimeOffset.UtcNow;
-        foreach (var (key, value) in _downloads)
-            if (value.ExpiresAt <= now) _downloads.TryRemove(key, out _);
         foreach (var (key, value) in _admins)
             if (value.ExpiresAt <= now) _admins.TryRemove(key, out _);
     }
@@ -180,14 +136,14 @@ public sealed class AdminAuth(
         {
             limiter.RecordFailure(baseKey);
             limiter.RecordFailure(userKey);
-            await index.InsertAuditAsync("admin.login.failed", null, null, null, ip, null, username, cancellationToken);
+            await index.InsertAuditAsync("admin.login.failed", null, null, ip, null, username, cancellationToken);
             return ServiceResult<AdminSession>.Fail(401, ErrorCodes.InvalidCredentials, "用户名或密码错误");
         }
 
         limiter.ResetFailures(baseKey);
         limiter.ResetFailures(userKey);
         var session = sessions.CreateAdmin(username, ip);
-        await index.InsertAuditAsync("admin.login", null, null, null, ip, null, username, cancellationToken);
+        await index.InsertAuditAsync("admin.login", null, null, ip, null, username, cancellationToken);
         return ServiceResult<AdminSession>.Success(session);
     }
 

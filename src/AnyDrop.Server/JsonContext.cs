@@ -2,26 +2,26 @@ using System.Text.Json.Serialization;
 
 namespace AnyDrop.Server;
 
-public sealed record SessionRequest(string? Key);
-
-public sealed record SessionResponse(string Kind, string Namespace, string ExpiresAt);
-
 public sealed record AdminLoginRequest(string? Username, string? Password);
 
 public sealed record AdminLoginResponse(string CsrfToken, string Username, string ExpiresAt);
 
-public sealed record SessionStateResponse(bool Authenticated, string? Kind, string? Namespace, string? CsrfToken);
+public sealed record SessionStateResponse(bool Authenticated, string? Kind, string? CsrfToken);
 
 public sealed record UploadResponse(string Id, string Url, string Sha256, long Size, string ExpiresAt);
 
+/// <summary>
+/// 管理端列表里的文件信息。<see cref="Url"/> 是**直链**（{publicBaseUrl}/v1/blobs/{id}）：
+/// 下载凭证就是这个 id，所以列表里直接把能拿到字节的链接给出来。
+/// </summary>
 public sealed record FileInfoDto(
     string Id,
+    string Url,
     string? Name,
     long Size,
     string Sha256,
     string? ContentType,
-    string Namespace,
-    string TokenId,
+    string? TokenId,
     string CreatedAt,
     string ExpiresAt,
     bool Pinned,
@@ -37,10 +37,6 @@ public sealed record TokenDto(
     string Id,
     string Name,
     string KeyPrefix,
-    string Namespace,
-    bool CanUpload,
-    bool CanRead,
-    bool CanDelete,
     long MaxFileBytes,
     long QuotaBytes,
     long UsedBytes,
@@ -51,13 +47,9 @@ public sealed record TokenDto(
 
 public sealed record TokenListResponse(List<TokenDto> Items);
 
+/// <summary>上传密钥的创建入参：密钥只负责上传，所以没有能力位与命名空间可配。</summary>
 public sealed record CreateTokenRequest(
     string? Name,
-    string? Preset,
-    string? Namespace,
-    bool? CanUpload,
-    bool? CanRead,
-    bool? CanDelete,
     int? TtlDays,
     long? QuotaBytes,
     long? MaxFileBytes);
@@ -70,7 +62,6 @@ public sealed record AuditDto(
     string Action,
     string? TokenId,
     string? BlobId,
-    string? Namespace,
     string? Ip,
     long? Bytes,
     string? Detail);
@@ -87,8 +78,6 @@ public sealed record SimpleStatusResponse(string Status, string? Id);
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(ApiError))]
 [JsonSerializable(typeof(ApiErrorEnvelope))]
-[JsonSerializable(typeof(SessionRequest))]
-[JsonSerializable(typeof(SessionResponse))]
 [JsonSerializable(typeof(AdminLoginRequest))]
 [JsonSerializable(typeof(AdminLoginResponse))]
 [JsonSerializable(typeof(SessionStateResponse))]

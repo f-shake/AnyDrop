@@ -30,10 +30,6 @@ public sealed class SqliteIndex
           name TEXT NOT NULL,
           key_hash TEXT NOT NULL,
           key_prefix TEXT NOT NULL,
-          scope_namespace TEXT NOT NULL,
-          can_upload INTEGER NOT NULL,
-          can_read INTEGER NOT NULL,
-          can_delete INTEGER NOT NULL,
           max_file_bytes INTEGER NOT NULL,
           quota_bytes INTEGER NOT NULL,
           used_bytes INTEGER NOT NULL DEFAULT 0,
@@ -57,8 +53,7 @@ public sealed class SqliteIndex
           chunk_size INTEGER NOT NULL,
           wrapped_dek BLOB NOT NULL,
           dek_nonce BLOB NOT NULL,
-          token_id TEXT NOT NULL,
-          namespace TEXT NOT NULL,
+          token_id TEXT NULL,
           created_at TEXT NOT NULL,
           expires_at TEXT NOT NULL,
           download_count INTEGER NOT NULL DEFAULT 0,
@@ -66,7 +61,6 @@ public sealed class SqliteIndex
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_blobs_expires ON blobs(expires_at)",
-        "CREATE INDEX IF NOT EXISTS idx_blobs_namespace ON blobs(namespace, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_blobs_token ON blobs(token_id)",
         """
         CREATE TABLE IF NOT EXISTS idempotency (
@@ -84,7 +78,6 @@ public sealed class SqliteIndex
           action TEXT NOT NULL,
           token_id TEXT NULL,
           blob_id TEXT NULL,
-          namespace TEXT NULL,
           ip TEXT NULL,
           bytes INTEGER NULL,
           detail TEXT NULL
@@ -103,6 +96,13 @@ public sealed class SqliteIndex
         """,
     ];
 
+    /// <summary>
+    /// 结构版本。AnyDrop 不提供自动迁移：读到不匹配的旧库一律拒绝启动。
+    /// 否则 CREATE TABLE IF NOT EXISTS 会把旧列原样留在表里，问题要拖到写入时才以一个
+    /// 费解的约束错误暴露出来。
+    /// </summary>
+    public const int SchemaVersion = 2;
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         var dir = Path.GetDirectoryName(_dbPath);
@@ -110,7 +110,39 @@ public sealed class SqliteIndex
         await using var connection = await OpenAsync(cancellationToken);
         await ExecAsync(connection, "PRAGMA journal_mode=WAL", cancellationToken);
         await ExecAsync(connection, "PRAGMA busy_timeout=10000", cancellationToken);
+        await EnsureSchemaVersionAsync(connection, cancellationToken);
         foreach (var ddl in Ddl) await ExecAsync(connection, ddl, cancellationToken);
+        await ExecAsync(connection, $"PRAGMA user_version = {SchemaVersion}", cancellationToken);
+    }
+
+    private async Task EnsureSchemaVersionAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        var version = Convert.ToInt32(await ScalarAsync(connection, "PRAGMA user_version", cancellationToken) ?? 0);
+        if (version == SchemaVersion) return;
+        if (version == 0)
+        {
+            // user_version 为 0 有两种可能：全新的空库，或 v1 时代建的库（那时不写版本号）。
+            // 用「是否已经有 AnyDrop 自己的表」把两者分开，空的才放行。
+            var tables = Convert.ToInt32(await ScalarAsync(connection,
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' " +
+                "AND name IN ('tokens','blobs','idempotency','audit_log','admin')",
+                cancellationToken) ?? 0);
+            if (tables == 0) return;
+        }
+        // user_version 为 0 有两种可能：v1 时代建的旧库（那时不写版本号），
+        // 或上次初始化在写完 DDL、写版本号之前就中断了。两者都只能删库重建，
+        // 所以文案要把两种可能都说出来，别硬说成 v1。
+        var found = version == 0 ? "v1 旧库（也可能是上次初始化没跑完的库）" : $"v{version}";
+        throw new InvalidOperationException(
+            $"数据库结构版本不匹配：{_dbPath} 是 {found}，当前程序需要 v{SchemaVersion}。" +
+            "AnyDrop 不做自动迁移，请停止服务后删除该 data 目录（或把 storage:dataDir 指到新路径）再启动。");
+    }
+
+    private static async Task<object?> ScalarAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        return await cmd.ExecuteScalarAsync(cancellationToken);
     }
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
@@ -142,13 +174,12 @@ public sealed class SqliteIndex
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = Command(connection,
             """
-            INSERT INTO tokens (id, name, key_hash, key_prefix, scope_namespace, can_upload, can_read, can_delete,
-                                max_file_bytes, quota_bytes, used_bytes, created_at, expires_at, revoked_at, last_used_at)
-            VALUES ($id, $name, $hash, $prefix, $ns, $up, $rd, $del, $max, $quota, $used, $created, $expires, NULL, NULL)
+            INSERT INTO tokens (id, name, key_hash, key_prefix, max_file_bytes, quota_bytes, used_bytes,
+                                created_at, expires_at, revoked_at, last_used_at)
+            VALUES ($id, $name, $hash, $prefix, $max, $quota, $used, $created, $expires, NULL, NULL)
             """,
             ("$id", token.Id), ("$name", token.Name), ("$hash", token.KeyHash), ("$prefix", token.KeyPrefix),
-            ("$ns", token.Namespace), ("$up", token.CanUpload ? 1 : 0), ("$rd", token.CanRead ? 1 : 0),
-            ("$del", token.CanDelete ? 1 : 0), ("$max", token.MaxFileBytes), ("$quota", token.QuotaBytes),
+            ("$max", token.MaxFileBytes), ("$quota", token.QuotaBytes),
             ("$used", token.UsedBytes), ("$created", token.CreatedAt), ("$expires", token.ExpiresAt));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -233,10 +264,6 @@ public sealed class SqliteIndex
         Name = r.GetString(r.GetOrdinal("name")),
         KeyHash = r.GetString(r.GetOrdinal("key_hash")),
         KeyPrefix = r.GetString(r.GetOrdinal("key_prefix")),
-        Namespace = r.GetString(r.GetOrdinal("scope_namespace")),
-        CanUpload = r.GetInt64(r.GetOrdinal("can_upload")) != 0,
-        CanRead = r.GetInt64(r.GetOrdinal("can_read")) != 0,
-        CanDelete = r.GetInt64(r.GetOrdinal("can_delete")) != 0,
         MaxFileBytes = r.GetInt64(r.GetOrdinal("max_file_bytes")),
         QuotaBytes = r.GetInt64(r.GetOrdinal("quota_bytes")),
         UsedBytes = r.GetInt64(r.GetOrdinal("used_bytes")),
@@ -256,15 +283,15 @@ public sealed class SqliteIndex
         await using (var cmd = Command(connection,
             """
             INSERT INTO blobs (id, name, size, sha256, content_type, cipher_path, key_version, file_nonce,
-                               chunk_size, wrapped_dek, dek_nonce, token_id, namespace, created_at, expires_at,
+                               chunk_size, wrapped_dek, dek_nonce, token_id, created_at, expires_at,
                                download_count, pinned)
-            VALUES ($id, $name, $size, $sha, $ctype, $path, $kv, $fnonce, $chunk, $wdek, $dnonce, $token, $ns,
+            VALUES ($id, $name, $size, $sha, $ctype, $path, $kv, $fnonce, $chunk, $wdek, $dnonce, $token,
                     $created, $expires, $downloads, $pinned)
             """,
             ("$id", blob.Id), ("$name", blob.Name), ("$size", blob.Size), ("$sha", blob.Sha256),
             ("$ctype", blob.ContentType), ("$path", blob.CipherPath), ("$kv", blob.KeyVersion),
             ("$fnonce", blob.FileNonce), ("$chunk", blob.ChunkSize), ("$wdek", blob.WrappedDek),
-            ("$dnonce", blob.DekNonce), ("$token", blob.TokenId), ("$ns", blob.Namespace),
+            ("$dnonce", blob.DekNonce), ("$token", blob.TokenId),
             ("$created", blob.CreatedAt), ("$expires", blob.ExpiresAt),
             ("$downloads", blob.DownloadCount), ("$pinned", blob.Pinned ? 1 : 0)))
         {
@@ -423,8 +450,7 @@ public sealed class SqliteIndex
         ChunkSize = r.GetInt32(r.GetOrdinal("chunk_size")),
         WrappedDek = Blob(r, "wrapped_dek"),
         DekNonce = Blob(r, "dek_nonce"),
-        TokenId = r.GetString(r.GetOrdinal("token_id")),
-        Namespace = r.GetString(r.GetOrdinal("namespace")),
+        TokenId = Text(r, "token_id"),
         CreatedAt = r.GetString(r.GetOrdinal("created_at")),
         ExpiresAt = r.GetString(r.GetOrdinal("expires_at")),
         DownloadCount = r.GetInt32(r.GetOrdinal("download_count")),
@@ -486,17 +512,17 @@ public sealed class SqliteIndex
     // ---------------- audit ----------------
 
     public async Task InsertAuditAsync(
-        string action, string? tokenId, string? blobId, string? ns, string? ip, long? bytes, string? detail,
+        string action, string? tokenId, string? blobId, string? ip, long? bytes, string? detail,
         CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = Command(connection,
             """
-            INSERT INTO audit_log (ts, action, token_id, blob_id, namespace, ip, bytes, detail)
-            VALUES ($ts, $action, $token, $blob, $ns, $ip, $bytes, $detail)
+            INSERT INTO audit_log (ts, action, token_id, blob_id, ip, bytes, detail)
+            VALUES ($ts, $action, $token, $blob, $ip, $bytes, $detail)
             """,
             ("$ts", Time.NowIso()), ("$action", action), ("$token", tokenId), ("$blob", blobId),
-            ("$ns", ns), ("$ip", ip), ("$bytes", bytes), ("$detail", detail));
+            ("$ip", ip), ("$bytes", bytes), ("$detail", detail));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -514,7 +540,6 @@ public sealed class SqliteIndex
                 reader.GetString(reader.GetOrdinal("action")),
                 Text(reader, "token_id"),
                 Text(reader, "blob_id"),
-                Text(reader, "namespace"),
                 Text(reader, "ip"),
                 reader.IsDBNull(reader.GetOrdinal("bytes")) ? null : reader.GetInt64(reader.GetOrdinal("bytes")),
                 Text(reader, "detail")));

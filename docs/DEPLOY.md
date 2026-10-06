@@ -85,15 +85,16 @@ curl -sS https://fshake.com/drop/healthz
 ```
 
 1. 浏览器打开 `https://fshake.com/drop/admin`，用第 3 步的密码登录。
-2. 在"密钥"里新建一个 `ai-write` 密钥，把显示的 key 存进 AI 所在机器的环境变量。
-3. 让 AI 上传一个文件，把返回的 `url` 发给自己，打开后输入读密钥下载，核对 sha256。
+2. 在"上传密钥"里新建一把密钥，把显示的 key 存进 AI 所在机器的环境变量。
+3. 让 AI 上传一个文件，把返回的 `url`（直链）发给自己——**直接打开就开始下载，不需要任何密钥**，核对 sha256。
+   反过来也一样：在管理面板里上传一个文件，把面板给的直链发给 AI，AI 直接 curl 就能取到。
 
 ## 7. 备份与升级
 
 - 需要备份的只有两样：`data/`（`anydrop.db` + `blobs/`）与 `data/master.key`。
 - **`master.key` 丢失 = 所有密文永久无法解密**，建议离线单独存一份。
-- 升级：停进程 → 覆盖 exe → 启动。表结构由程序启动时 `CREATE TABLE IF NOT EXISTS` 建立，
-  当前没有迁移脚本；如果以后改了表结构会在文档里单独说明。
+- 升级：停进程 → 覆盖 exe → 启动。表结构由程序启动时建立，**当前结构版本 v2**：
+  程序会写 `PRAGMA user_version`，遇到版本不匹配的旧库会拒绝启动并提示删除 data 目录（不自动迁移）。
 
 ## 8. 常见问题
 
@@ -103,5 +104,5 @@ curl -sS https://fshake.com/drop/healthz
 | 登录成功后立刻又变回未登录 | `cookieSecure=true` 但你在用 HTTP 访问；要么配 HTTPS，要么临时改成 `false` |
 | 大文件上传卡住 | nginx 没关 `proxy_request_buffering`，或 `proxy_read_timeout` 太短 |
 | 管理页 503「管理界面未构建」 | 发布时没带内嵌前端：重跑 `build-web.ps1` 再 publish |
-| 下载 404 但文件刚传过 | 命名空间不匹配（读密钥与文件不属于同一命名空间），或已过期被 GC 回收 |
+| 下载 404 但文件刚传过 | 已过期被 GC 回收，或 id 被截断/改写过（id 本身就是凭证，必须完整） |
 | 磁盘被占满 | 检查 `retention.defaultTtlDays`、各密钥配额，以及 `storage.minFreeBytes` 水位设置 |

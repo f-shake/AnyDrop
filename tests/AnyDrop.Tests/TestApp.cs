@@ -66,33 +66,20 @@ public sealed class TestApp : WebApplicationFactory<Program>
         await index.SetAdminPasswordAsync(hash, salt, iterations);
     }
 
-    /// <summary>通过 TokenService 建 token，返回记录与明文 key（只在这一刻存在）。</summary>
+    /// <summary>通过 TokenService 建一把上传密钥，返回记录与明文 key（只在这一刻存在）。</summary>
     public async Task<(TokenRecord Token, string Key)> CreateTokenAsync(
-        string preset = TokenPresets.AiWrite,
-        string? ns = null,
         long? quotaBytes = null,
         long? maxFileBytes = null,
         int? ttlDays = null)
     {
         var tokens = GetService<TokenService>();
         var request = new CreateTokenRequest(
-            $"test-{Guid.NewGuid():N}"[..16], preset, ns, null, null, null, ttlDays, quotaBytes, maxFileBytes);
+            $"test-{Guid.NewGuid():N}"[..16], ttlDays, quotaBytes, maxFileBytes);
         var result = await tokens.CreateAsync(request, CancellationToken.None);
         if (!result.Ok) throw new InvalidOperationException($"建 token 失败：{result.Failure!.Value.Message}");
         var key = result.Value!.Key;
         var record = await GetService<SqliteIndex>().GetTokenAsync(result.Value.Token.Id);
         return (record!, key);
-    }
-
-    public async Task<(TokenRecord Token, string Key)> CreateReadTokenAsync(string? ns = null, bool canDelete = false)
-    {
-        var tokens = GetService<TokenService>();
-        var request = new CreateTokenRequest(
-            "reader", "me-read", ns, null, true, canDelete, null, null, null);
-        var result = await tokens.CreateAsync(request, CancellationToken.None);
-        if (!result.Ok) throw new InvalidOperationException($"建 token 失败：{result.Failure!.Value.Message}");
-        var record = await GetService<SqliteIndex>().GetTokenAsync(result.Value!.Token.Id);
-        return (record!, result.Value.Key);
     }
 
     public Task<GcReport> RunGcAsync() => GetService<GcService>().RunOnceAsync(CancellationToken.None);
@@ -101,6 +88,17 @@ public sealed class TestApp : WebApplicationFactory<Program>
     public Task ExpireTokenAsync(string tokenId) => SetExpiryAsync("tokens", tokenId);
 
     public Task ExpireBlobAsync(string blobId) => SetExpiryAsync("blobs", blobId);
+
+    /// <summary>直接数 idempotency 行数：用例需要证明某条路径确实没有写幂等表。</summary>
+    public async Task<long> CountIdempotencyAsync()
+    {
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            $"Data Source={Path.Combine(DataDir, "anydrop.db")}");
+        await connection.OpenAsync();
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM idempotency";
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync());
+    }
 
     private async Task SetExpiryAsync(string table, string id)
     {

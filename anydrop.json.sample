@@ -5,7 +5,6 @@
     "publicBaseUrl": "https://fshake.com/drop",
     "maxUploadBytes": 268435456,
     "maxConcurrentUploads": 4,
-    "sessionDays": 30,
     "cookieSecure": true
   },
   "storage": {

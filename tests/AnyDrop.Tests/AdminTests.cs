@@ -158,17 +158,22 @@ public sealed class AdminTests
         var csrf = await CsrfAsync(client);
 
         var create = await client.SendAsync(Mutate(HttpMethod.Post, "/api/admin/tokens", csrf,
-            new CreateTokenRequest("ai-nas", "ai-write", "to-nas", null, null, null, 30, 1024L * 1024 * 1024, 1024L * 1024)));
+            new CreateTokenRequest("ai-nas", 30, 1024L * 1024 * 1024, 1024L * 1024)));
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
         var created = await create.Content.ReadFromJsonAsync<CreateTokenResponse>();
         Assert.StartsWith("ad_", created!.Key);
-        Assert.Equal("to-nas", created.Token.Namespace);
-        Assert.True(created.Token.CanUpload);
-        Assert.False(created.Token.CanRead);
+        Assert.Equal("ai-nas", created.Token.Name);
+        Assert.Equal(1024L * 1024, created.Token.MaxFileBytes);
+        Assert.Equal(1024L * 1024 * 1024, created.Token.QuotaBytes);
+        Assert.Equal(0, created.Token.UsedBytes);
 
         var list = await client.GetFromJsonAsync<TokenListResponse>("/api/admin/tokens");
         Assert.Contains(list!.Items, t => t.Id == created.Token.Id);
-        Assert.DoesNotContain(created.Key, list.Items.Select(t => t.KeyPrefix));
+        // 密钥绝不能出现在列表响应里。注意：拿 KeyPrefix（只有 9 位）去比完整 key 是恒真的空断言，
+        // 必须查原始响应体，这样字段被改成回吐完整 key 时才会真的红。
+        var listRaw = await client.GetStringAsync("/api/admin/tokens");
+        Assert.DoesNotContain(created.Key, listRaw);
+        Assert.DoesNotContain(created.Key[9..], listRaw);
 
         var revoke = await client.SendAsync(Mutate(HttpMethod.Post, $"/api/admin/tokens/{created.Token.Id}/revoke", csrf));
         Assert.Equal(HttpStatusCode.OK, revoke.StatusCode);
@@ -187,7 +192,7 @@ public sealed class AdminTests
         var client = await LoginAsync(app);
         var csrf = await CsrfAsync(client);
 
-        var response = await client.SendAsync(Mutate(HttpMethod.Post, "/api/admin/tokens", csrf, new { name = "", preset = "ai-write" }));
+        var response = await client.SendAsync(Mutate(HttpMethod.Post, "/api/admin/tokens", csrf, new { name = "" }));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -221,22 +226,87 @@ public sealed class AdminTests
     }
 
     [Fact]
-    public async Task 下载会话注销不需要CSRF()
+    public async Task 管理员删除密钥上传的文件后配额回退()
     {
         using var app = new TestApp();
-        var (_, writeKey) = await app.CreateTokenAsync();
-        var (_, readKey) = await app.CreateReadTokenAsync();
+        var (token, key) = await app.CreateTokenAsync();
+        var client = await LoginAsync(app);
+        var csrf = await CsrfAsync(client);
+        var upload = await TestHttp.UploadOkAsync(client, key, Encoding.UTF8.GetBytes("quota-body"));
+        var index = app.GetService<SqliteIndex>();
+        Assert.Equal(upload.Size, (await index.GetTokenAsync(token.Id))!.UsedBytes);
+
+        var delete = await client.SendAsync(Mutate(HttpMethod.Delete, $"/api/admin/files/{upload.Id}", csrf));
+
+        Assert.Equal(HttpStatusCode.OK, delete.StatusCode);
+        Assert.Null(await index.GetBlobAsync(upload.Id));
+        // 配额是密钥的属性：文件没了，占的字节必须还回去，否则会被永久占住
+        Assert.Equal(0, (await index.GetTokenAsync(token.Id))!.UsedBytes);
+    }
+
+    [Fact]
+    public async Task 并发删除同一文件只回退一次配额()
+    {
+        using var app = new TestApp();
+        var (token, key) = await app.CreateTokenAsync();
         var client = app.NewClient();
-        var upload = await TestHttp.UploadOkAsync(client, writeKey, Encoding.UTF8.GetBytes("x"));
+        var keep = await TestHttp.UploadOkAsync(client, key, Encoding.UTF8.GetBytes("kept-file"));
+        var drop = await TestHttp.UploadOkAsync(client, key, Encoding.UTF8.GetBytes("dropped-file"));
+        var admin = await LoginAsync(app);
+        var csrf = await CsrfAsync(admin);
+        var index = app.GetService<SqliteIndex>();
+        Assert.Equal(keep.Size + drop.Size, (await index.GetTokenAsync(token.Id))!.UsedBytes);
 
-        // 有意不要求 CSRF：这是 AGENT_UPLOAD.md 文档化的脚本调用路径，且代价仅是重输读密钥
-        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync("/api/session", TestApp.Json(new { key = readKey }))).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/v1/blobs/{upload.Id}")).StatusCode);
+        // 两个删除同时在飞。删行返回值是唯一的并发闸门：只有真正删掉行的那一次才允许扣配额。
+        // 注：这个交错本身不可确定性复现（没有可注入的接缝），所以本用例钉的是**不变式**——
+        // 无论谁赢，用量都必须正好等于还活着的文件，绝不能因为扣两次而偏低（那会超额占盘）。
+        var responses = await Task.WhenAll(
+            admin.SendAsync(Mutate(HttpMethod.Delete, $"/api/admin/files/{drop.Id}", csrf)),
+            admin.SendAsync(Mutate(HttpMethod.Delete, $"/api/admin/files/{drop.Id}", csrf)));
 
-        var logout = await client.DeleteAsync("/api/session");
+        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.OK));
+        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.NotFound));
+        Assert.Equal(keep.Size, (await index.GetTokenAsync(token.Id))!.UsedBytes);
+    }
 
-        Assert.Equal(HttpStatusCode.OK, logout.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync($"/v1/blobs/{upload.Id}")).StatusCode);
+    [Fact]
+    public async Task 下载会话接口已下线()
+    {
+        using var app = new TestApp();
+        var client = app.NewClient();
+
+        var post = await client.PostAsync("/api/session", TestApp.Json(new { key = "ad_x" }));
+        var delete = await client.DeleteAsync("/api/session");
+
+        Assert.Equal(HttpStatusCode.NotFound, post.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
+    }
+
+    [Fact]
+    public async Task 管理员删除管理端上传的文件不动任何密钥配额()
+    {
+        using var app = new TestApp();
+        var (token, key) = await app.CreateTokenAsync();
+        var client = app.NewClient();
+        // 先让这把密钥有**非零**用量：否则「删管理端的文件之后它还是 0」是恒真的空断言，
+        // 任何误扣都检测不到。
+        await TestHttp.UploadOkAsync(client, key, Encoding.UTF8.GetBytes("token-owned"));
+        var admin = await LoginAsync(app);
+        var csrf = await CsrfAsync(admin);
+        var index = app.GetService<SqliteIndex>();
+        var usedBefore = (await index.GetTokenAsync(token.Id))!.UsedBytes;
+        Assert.Equal(Encoding.UTF8.GetBytes("token-owned").Length, usedBefore);
+
+        var upload = await TestHttp.UploadOkAsync(admin, key: null, body: Encoding.UTF8.GetBytes("by-admin"),
+            url: "/api/admin/files", fileName: null, csrf: csrf);
+        // 管理端上传不属于任何密钥：token_id 记 null，而不是某个哨兵字符串
+        Assert.Null((await index.GetBlobAsync(upload.Id))!.TokenId);
+
+        var delete = await admin.SendAsync(Mutate(HttpMethod.Delete, $"/api/admin/files/{upload.Id}", csrf));
+
+        Assert.Equal(HttpStatusCode.OK, delete.StatusCode);
+        // 精确不变：任何误扣都会让这个非零值变掉
+        Assert.Equal(usedBefore, (await index.GetTokenAsync(token.Id))!.UsedBytes);
     }
 
     [Fact]
@@ -255,22 +325,19 @@ public sealed class AdminTests
     }
 
     [Fact]
-    public async Task 读取密钥可以通过API建立下载会话()
+    public async Task 下载不需要任何会话或密钥()
     {
         using var app = new TestApp();
         var (_, writeKey) = await app.CreateTokenAsync();
-        var (_, readKey) = await app.CreateReadTokenAsync();
         var client = app.NewClient();
-        var upload = await TestHttp.UploadOkAsync(client, writeKey, Encoding.UTF8.GetBytes("session-body"));
+        var upload = await TestHttp.UploadOkAsync(client, writeKey, Encoding.UTF8.GetBytes("public-body"));
 
-        var session = await client.PostAsync("/api/session", TestApp.Json(new { key = readKey }));
-        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
-        var body = await session.Content.ReadFromJsonAsync<SessionResponse>();
-        Assert.Equal("download", body!.Kind);
-
+        // 换成一把 cookie 全空的客户端：下载必须照样成功
         var anonymous = app.NewClient();
-        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync($"/v1/blobs/{upload.Id}")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/v1/blobs/{upload.Id}")).StatusCode);
+        var response = await anonymous.GetAsync($"/v1/blobs/{upload.Id}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(Encoding.UTF8.GetBytes("public-body"), await response.Content.ReadAsByteArrayAsync());
     }
 
     [Fact]
@@ -317,7 +384,7 @@ public sealed class AdminTests
 
         var upload = await TestHttp.UploadOkAsync(client, key, Encoding.UTF8.GetBytes("prefixed"), url: "/drop/v1/blobs");
 
-        Assert.StartsWith("https://example.com/drop/f/", upload.Url);
+        Assert.StartsWith("https://example.com/drop/v1/blobs/", upload.Url);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/drop/f/{upload.Id}")).StatusCode);
 
         var api404 = await client.GetAsync("/drop/v1/nope");

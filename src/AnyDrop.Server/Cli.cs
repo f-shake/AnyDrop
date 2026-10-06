@@ -51,7 +51,16 @@ internal static class Cli
         }
 
         var index = new SqliteIndex(config, NullLogger<SqliteIndex>.Instance);
-        await index.InitializeAsync();
+        try
+        {
+            await index.InitializeAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            // 与 Program.cs 保持同一句提示：结构版本不匹配时要给可操作的出路，而不是一坨堆栈
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
         var (hash, salt, iterations) = SecretHasher.HashPassword(password);
         await index.SetAdminPasswordAsync(hash, salt, iterations);
         Console.WriteLine($"管理员密码已写入 {config.DbPath}");

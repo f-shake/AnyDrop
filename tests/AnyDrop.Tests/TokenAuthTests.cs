@@ -5,36 +5,16 @@ namespace AnyDrop.Tests;
 
 public sealed class TokenAuthTests
 {
-    [Theory]
-    [InlineData(TokenPresets.AiWrite, true, false, false)]
-    [InlineData(TokenPresets.MeRead, false, true, false)]
-    [InlineData(TokenPresets.NasPull, false, true, true)]
-    public async Task 预设对应的能力位正确(string preset, bool upload, bool read, bool delete)
+    [Fact]
+    public async Task 新建的上传密钥可直接认证()
     {
         using var app = new TestApp();
-        var (token, key) = await app.CreateTokenAsync(preset);
+        var (token, key) = await app.CreateTokenAsync();
 
-        Assert.Equal(upload, token.CanUpload);
-        Assert.Equal(read, token.CanRead);
-        Assert.Equal(delete, token.CanDelete);
         Assert.StartsWith("ad_", key);
         Assert.Equal(key[..9], token.KeyPrefix);
         Assert.DoesNotContain(key, token.KeyHash, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task 显式能力位覆盖预设()
-    {
-        using var app = new TestApp();
-        var tokens = app.GetService<TokenService>();
-        var result = await tokens.CreateAsync(
-            new CreateTokenRequest("custom", TokenPresets.AiWrite, "ns1", false, true, true, null, null, null),
-            CancellationToken.None);
-
-        Assert.True(result.Ok);
-        Assert.False(result.Value!.Token.CanUpload);
-        Assert.True(result.Value.Token.CanRead);
-        Assert.True(result.Value.Token.CanDelete);
+        Assert.Null(token.RevokedAt);
     }
 
     [Fact]
@@ -43,7 +23,7 @@ public sealed class TokenAuthTests
         using var app = new TestApp(("server:maxUploadBytes", "2048"));
         var tokens = app.GetService<TokenService>();
         var result = await tokens.CreateAsync(
-            new CreateTokenRequest("big", null, null, null, null, null, null, null, 999_999),
+            new CreateTokenRequest("big", null, null, 999_999),
             CancellationToken.None);
 
         Assert.True(result.Ok);
@@ -51,45 +31,21 @@ public sealed class TokenAuthTests
     }
 
     [Theory]
-    [InlineData("", TokenPresets.AiWrite, "default", "name")]
-    [InlineData("ok", "unknown-preset", "default", "preset")]
-    [InlineData("ok", null, "Bad-NS", "namespace")]
-    [InlineData("ok", null, "with space", "namespace")]
-    [InlineData("ok", null, ".leading-dot", "namespace")]
-    [InlineData("ok", null, "default", "quota")]
-    [InlineData("ok", null, "default", "maxfile")]
-    [InlineData("ok", null, "default", "ttl")]
-    public async Task 非法入参被拒绝(string name, string? preset, string ns, string kind)
+    [InlineData("", null, null, null)]
+    [InlineData("ok", 99999, null, null)]
+    [InlineData("ok", null, 0L, null)]
+    [InlineData("ok", null, null, -1L)]
+    public async Task 非法入参被拒绝(string name, int? ttlDays, long? quotaBytes, long? maxFileBytes)
     {
         using var app = new TestApp();
         var tokens = app.GetService<TokenService>();
-        var request = new CreateTokenRequest(
-            name,
-            preset,
-            ns,
-            null, null, null,
-            kind == "ttl" ? 99999 : null,
-            kind == "quota" ? 0 : null,
-            kind == "maxfile" ? -1 : null);
+        var request = new CreateTokenRequest(name, ttlDays, quotaBytes, maxFileBytes);
 
         var result = await tokens.CreateAsync(request, CancellationToken.None);
 
         Assert.False(result.Ok);
         Assert.Equal(400, result.Failure!.Value.Status);
         Assert.Equal(ErrorCodes.BadRequest, result.Failure.Value.Code);
-    }
-
-    [Fact]
-    public async Task 至少要有一项能力()
-    {
-        using var app = new TestApp();
-        var tokens = app.GetService<TokenService>();
-        var result = await tokens.CreateAsync(
-            new CreateTokenRequest("none", null, null, false, false, false, null, null, null),
-            CancellationToken.None);
-
-        Assert.False(result.Ok);
-        Assert.Equal(400, result.Failure!.Value.Status);
     }
 
     [Fact]
@@ -152,16 +108,4 @@ public sealed class TokenAuthTests
         Assert.Equal(401, result.Failure!.Value.Status);
         Assert.Equal(ErrorCodes.TokenExpired, result.Failure.Value.Code);
     }
-
-    [Theory]
-    [InlineData("default", true)]
-    [InlineData("ns-1", true)]
-    [InlineData("a.b_c-d", true)]
-    [InlineData("A", false)]
-    [InlineData("", false)]
-    [InlineData("-x", false)]
-    [InlineData("_x", false)]
-    [InlineData("0123456789012345678901234567890123", false)]
-    public void 命名空间校验规则(string ns, bool expected) =>
-        Assert.Equal(expected, TokenService.IsValidNamespace(ns));
 }

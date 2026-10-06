@@ -1,5 +1,11 @@
 # AnyDrop 开发计划 v1.2（G1 已确认）
 
+> ⚠️ **本文档 §1–§11 是 v1 原始计划，其中一部分已被推翻，不要再照抄。**
+> 下载模型已改为 keyless。凡涉及「读取密钥 / 能力位 / 命名空间 / 下载会话 / `POST /api/session` /
+> `sessionDays` / `scope_denied` / 下载需鉴权 / 返回的 `url` 指向 `/f/{id}`」的表述，
+> 一律以文末「**附：keyless 下载重构（结构 v2，推翻 F3/F4/F15/F16）**」为准。
+> 正文保留原样是为了留下决策历史，不是现状描述。
+
 公网文件交换服务。AI 用环境变量里的写 key 上传、拿回 id/URL；人输读 key 下载；磁盘上加密；`/drop/admin` 管理页。
 
 部署形态：公网 VPS 上手动启动单个 AOT exe；公网入口 `https://fshake.com/drop`，由服务器 nginx 反代到 `127.0.0.1:8790`。
@@ -12,8 +18,8 @@
 |---|---|
 | F1 | `POST /drop/v1/blobs` + Bearer 写 token + `X-Filename` + 原始字节体 → 201 `{id,url,sha256,size,expiresAt}` |
 | F2 | id = 16 字节 CSPRNG → 26 位 Crockford Base32；不含文件名/哈希/时间 |
-| F3 | `GET /drop/v1/blobs/{id}` 需读 token 或有效会话；否则 401 |
-| F4 | `GET /drop/f/{id}` = 服务端直出的极简下载页（无框架）→ 输 key → `POST /drop/api/session` → 跳转下载 |
+| F3 | `GET /drop/v1/blobs/{id}` 需读 token 或有效会话；否则 401 **【已作废：现为完全公开，见文末附录】** |
+| F4 | `GET /drop/f/{id}` = 服务端直出的极简下载页（无框架）→ 输 key → `POST /drop/api/session` → 跳转下载 **【已作废：现为无需密钥的信息页，见文末附录】** |
 | F5 | 上传返回与 `X-File-Sha256` 均为明文的 SHA-256；上传后下载逐字节一致 |
 | F6 | `data/` 内不含明文（明文特征串检索零命中） |
 | F7 | `GET /drop/admin` = Vue 3 + Element Plus + TS 单页：登录、文件表、下载/删除/改期/pin、token 管理、创建后一次性显示 key |
@@ -24,8 +30,8 @@
 | F12 | 上传/下载/删除写 `audit_log`（含真实 IP，不记明文 key） |
 | F13 | `GET /drop/healthz` → 状态 + 剩余磁盘 + 文件数 |
 | F14 | SPA history 路由白名单回退（`/drop/`、`/drop/admin/**` → index.html；`/v1/**`、`/api/**`、`/healthz` 永不吞）+ 严格 CSP + UI 未构建兜底页 |
-| F15 | 能力位 `can_upload / can_read / can_delete`，预设 `ai-write` / `me-read` / `nas-pull` |
-| F16 | 反向取件按 id：`nas-pull` token 访问 `to-nas` 命名空间，可勾选取完自删 |
+| F15 | 能力位 `can_upload / can_read / can_delete`，预设 `ai-write` / `me-read` / `nas-pull` **【已作废：只剩上传密钥，见文末附录】** |
+| F16 | 反向取件按 id：`nas-pull` token 访问 `to-nas` 命名空间，可勾选取完自删 **【已作废：命名空间与密钥删除权均已删除，见文末附录】** |
 
 ## 2. 技术方案
 
@@ -69,7 +75,7 @@ admin(id INT PK CHECK(id=1), password_hash TEXT, salt BLOB, iterations INT, crea
 
 磁盘格式：`data/blobs/{id 前 2 位}/{id}` = `header(magic|ver|chunkSize|fileNonce|keyVersion) + N×(密文||16B tag)`，nonce = `fileNonce(4B) || 块序号(8B BE)`。
 
-会话在内存（重启失效）。配置 `anydrop.json`（`ANYDROP__*` 环境变量可覆盖）：`pathBase` / `publicBaseUrl` / `maxUploadBytes` / `dataDir` / `minFreeBytes` / `maxUsedPercent` / `defaultTtlDays` / `gcIntervalMinutes` / `sessionDays` / `trustProxy`。
+会话在内存（重启失效）。配置 `anydrop.json`（`ANYDROP__*` 环境变量可覆盖）：`pathBase` / `publicBaseUrl` / `maxUploadBytes` / `dataDir` / `minFreeBytes` / `maxUsedPercent` / `defaultTtlDays` / `gcIntervalMinutes` / ~~`sessionDays`~~（**已删除**）/ `trustProxy`。
 
 ## 5. 模块划分
 
@@ -89,7 +95,7 @@ admin(id INT PK CHECK(id=1), password_hash TEXT, salt BLOB, iterations INT, crea
 
 - **AI 上传**：`ANYDROP_KEY` → `curl -X POST https://fshake.com/drop/v1/blobs -H "Authorization: Bearer $ANYDROP_KEY" -H "X-Filename: r.md" --data-binary @r.md`。
 - **人取件**：点 url → 输读 key → 会话 cookie（`Path=/drop`，默认 30 天）→ 浏览器原生下载。
-- **发给 NAS**：用 `to-nas` 写 token 上传得 id → 把 id 给 NAS 上的 AI → 它用 `nas-pull` token 按 id 取（有 delete 权则自删）。
+- **发给 NAS**：~~用 `to-nas` 写 token 上传得 id → 把 id 给 NAS 上的 AI → 它用 `nas-pull` token 按 id 取（有 delete 权则自删）~~ **【已作废：命名空间、读密钥与密钥删除权都已删除；现在把上传返回的直链给 NAS 即可，删除只能由管理员在面板里做，见文末附录】**。
 - **超管**：`/drop/admin` 登录后管理；新 token 的 key 只在创建时显示一次。
 - **状态流转**：写 `.part` → `rename` + 写库（active）→ `expired` → GC 删除。先落文件后写库，失败只留孤儿；DB 绝不指向不存在的密文。
 
@@ -100,7 +106,7 @@ admin(id INT PK CHECK(id=1), password_hash TEXT, salt BLOB, iterations INT, crea
 | HTTP | code | message |
 |---|---|---|
 | 401 | `invalid_token` / `token_expired` | 密钥无效或已撤销 / 密钥已过期 |
-| 403 | `scope_denied` | 该密钥无权执行此操作 |
+| 403 | ~~`scope_denied`~~ | **已删除**：不再有任何「能力/命名空间」判断会返回它 |
 | 404 | `not_found` | 文件不存在或已过期 |
 | 409 | `idempotency_conflict` | 该幂等键已用于不同内容 |
 | 413 | `file_too_large` | 文件超过上限（最大 256 MiB） |
@@ -200,3 +206,53 @@ deploy/{nginx-anydrop.conf.sample, NOTICE-element-plus.txt}
 - 密文与元数据不一致时在写任何字节前返回 500 `integrity_error`；正文已开始后的失败改为中断连接。
 - 下载响应类型固定 `application/octet-stream`。
 - `--set-password` 增加 `-stdin` 变体并告警；`retention:defaultTtlDays` 等配置项补校验。
+
+---
+
+## 附：keyless 下载重构（结构 v2，推翻 F3/F4/F15/F16）
+
+方向调整：**下载不再需要任何密钥**。blob id 本身就是下载凭证（128 bit CSPRNG，不可枚举），
+因此「读取密钥 / 能力位 / 命名空间 / 下载会话」这一整套被删除。本节内容优先于上文冲突处。
+
+### 作废与替代
+
+| 原条目 | 现在 |
+|---|---|
+| F3「下载需读 token 或会话，否则 401」 | `GET/HEAD /v1/blobs/{id}` **完全公开**，只校验「存在且未过期」；`Authorization` 被忽略 |
+| F4「下载页输 key → `/api/session` → 跳转」 | `GET /f/{id}` 直接渲染文件卡片；取不到返回 404 页面。`POST /f/{id}` 与 `/api/session`（POST/DELETE）**已下线** |
+| F15「能力位 + 三种预设」 | tokens 表删除 `can_upload / can_read / can_delete`、`TokenPresets`；只剩一种密钥：**上传密钥** |
+| F16「按 id 反向取件、自删」 | 命名空间删除；`DELETE /v1/blobs/{id}` **已下线**，删除只能由管理会话发起（配额仍按 `blob.token_id` 回退） |
+
+其余下载行为不变：Range/206、`X-File-Sha256`、`Content-Disposition`、固定 `application/octet-stream`、
+过期即 404、下载计数与审计。新增响应头 `Referrer-Policy: no-referrer` 与 `X-Robots-Tag: noindex`。
+
+**返回的 `url` 改为直链**：`{publicBaseUrl}/v1/blobs/{id}` —— 浏览器点开即下载，AI/脚本 curl 它即取到字节，
+不再需要把 `/f/` 改写成 `/v1/blobs/`。原来那个 HTML 卡片页仍保留在 `{publicBaseUrl}/f/{id}`，
+但降级为**可选的人类视图**（展示大小 / sha256 / 过期时间和一个下载按钮），不被任何界面链接。
+
+### 结构 v2（推翻 §4）
+
+```sql
+tokens(id TEXT PK, name TEXT, key_hash TEXT, key_prefix TEXT, max_file_bytes INT,
+       quota_bytes INT, used_bytes INT DEFAULT 0, created_at TEXT, expires_at TEXT NULL,
+       revoked_at TEXT NULL, last_used_at TEXT NULL)          -- 删 scope_namespace 与三个能力位
+blobs(…, token_id TEXT NULL, …)                               -- 删 namespace；NULL = 管理员上传
+idempotency(token_id TEXT, key TEXT, blob_id TEXT, created_at TEXT, PRIMARY KEY(token_id,key))
+audit_log(…, token_id TEXT NULL, blob_id TEXT NULL, ip TEXT NULL, bytes INT NULL, detail TEXT NULL)  -- 删 namespace
+admin(不变)
+```
+
+- `blobs.token_id` 由 `NOT NULL` 改为可空，管理员上传记 `NULL`；`AdminUploadIdentity`（`"admin"` 哨兵）已删除。
+- 不提供迁移：`PRAGMA user_version = 2`，启动时版本不匹配（或 v1 时代无版本号的旧库）**直接拒绝启动**并提示删除 data 目录。
+
+### 配置与错误码
+
+- 删除 `server:sessionDays`（下载会话不存在了）。
+- 删除错误码 `scope_denied`（没有任何「能力/命名空间」判断会再产生它）。
+- `docs/AGENT_UPLOAD.md` 已按新模型重写；README 的密钥模型与安全边界章节同步更新。
+
+### 已知取舍（原设计代价，接受并记录）
+
+- 链接泄漏 = 文件泄漏，且**无法单独吊销**：只能删文件或等过期。响应头只能降低 Referer/爬虫两种泄漏面。
+- 上传密钥泄漏的后果收窄为「别人能上传」，比 v1 更安全；这是本次重构的净收益。
+- 管理端上传没有幂等键（与 v1 一致，仍未解决）。

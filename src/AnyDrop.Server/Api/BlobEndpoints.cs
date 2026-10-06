@@ -84,6 +84,16 @@ public static class BlobEndpoints
             context.Request.Body,
             ipAccessor.Get(context));
 
+        return await ExecuteUploadAsync(request, blobs, cancellationToken);
+    }
+
+    /// <summary>
+    /// 上传编排的异常统一映射成错误信封。token 上传与管理端上传共用这一份，
+    /// 避免两条路径的状态码与文案各自漂移。
+    /// </summary>
+    public static async Task<IResult> ExecuteUploadAsync(
+        UploadRequest request, BlobService blobs, CancellationToken cancellationToken)
+    {
         try
         {
             var result = await blobs.UploadAsync(request, cancellationToken);
@@ -93,11 +103,11 @@ public static class BlobEndpoints
         }
         catch (PayloadTooLargeException)
         {
-            return ApiErrors.FileTooLarge(blobs.EffectiveMaxUpload(token));
+            return ApiErrors.FileTooLarge(blobs.EffectiveMaxUpload(request.Token));
         }
         catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge)
         {
-            return ApiErrors.FileTooLarge(blobs.EffectiveMaxUpload(token));
+            return ApiErrors.FileTooLarge(blobs.EffectiveMaxUpload(request.Token));
         }
         catch (BadHttpRequestException)
         {

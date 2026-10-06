@@ -94,3 +94,11 @@ export interface SimpleStatusResponse {
   status: string
   id?: string | null
 }
+
+export interface UploadResponse {
+  id: string
+  url: string
+  sha256: string
+  size: number
+  expiresAt: string
+}

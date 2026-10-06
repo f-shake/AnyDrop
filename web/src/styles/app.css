@@ -1,18 +1,53 @@
 :root {
   color-scheme: light;
   font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+
+  /* 页面自身的语义色。暗色下直接复用 Element Plus 的变量，
+     这样自定义卡片/文字不会和 Element 组件出现色差。 */
+  --anydrop-page-bg: #f5f6f8;
+  --anydrop-fg: #1f2328;
+  --anydrop-muted: #6b7280;
+  --anydrop-card-bg: #fff;
+  --anydrop-card-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  --anydrop-key-bg: #f0f1f3;
+}
+
+html.dark {
+  color-scheme: dark;
+  --anydrop-page-bg: #101014;
+  --anydrop-fg: var(--el-text-color-primary, #e5eaf3);
+  --anydrop-muted: var(--el-text-color-secondary, #a3a6ad);
+  --anydrop-card-bg: var(--el-bg-color-overlay, #1d1e1f);
+  --anydrop-card-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  --anydrop-key-bg: var(--el-fill-color-light, #262727);
+}
+
+html {
+  background: var(--anydrop-page-bg);
 }
 
 body {
   margin: 0;
-  background: #f5f6f8;
-  color: #1f2328;
+  background: var(--anydrop-page-bg);
+  color: var(--anydrop-fg);
+  transition: background-color 0.2s, color 0.2s;
 }
 
 .anydrop-shell {
+  box-sizing: border-box;
   max-width: 1180px;
   margin: 0 auto;
   padding: 24px 16px 48px;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* 未登录时只有一张卡片，整屏垂直居中（含“加载中”状态） */
+.anydrop-shell--login {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-bottom: 24px;
 }
 
 .anydrop-header {
@@ -23,6 +58,13 @@ body {
   margin-bottom: 16px;
 }
 
+.anydrop-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .anydrop-title {
   font-size: 20px;
   font-weight: 600;
@@ -31,21 +73,22 @@ body {
 
 .anydrop-subtitle {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--anydrop-muted);
   margin: 4px 0 0;
 }
 
 .anydrop-card {
-  background: #fff;
+  background: var(--anydrop-card-bg);
   border-radius: 12px;
   padding: 16px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--anydrop-card-shadow);
   margin-bottom: 16px;
 }
 
 .anydrop-login {
+  width: 100%;
   max-width: 380px;
-  margin: 8vh auto 0;
+  margin: 0 auto;
 }
 
 .anydrop-toolbar {
@@ -64,9 +107,89 @@ body {
 
 .anydrop-key {
   font-family: ui-monospace, Consolas, monospace;
-  background: #f0f1f3;
+  background: var(--anydrop-key-bg);
   padding: 8px 10px;
   border-radius: 6px;
   word-break: break-all;
   font-size: 13px;
+}
+
+.anydrop-hint {
+  font-size: 12px;
+  color: var(--anydrop-muted);
+}
+
+/* 上传区：虚线框，拖拽悬停时高亮并变色 */
+.anydrop-dropzone {
+  border: 1px dashed var(--el-border-color, #dcdfe6);
+  border-radius: 10px;
+  padding: 22px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--anydrop-muted);
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s, color 0.2s;
+}
+
+.anydrop-dropzone:hover,
+.anydrop-dropzone:focus-visible {
+  border-color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, #409eff);
+  outline: none;
+}
+
+.anydrop-dropzone--active {
+  border-color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  color: var(--el-color-primary, #409eff);
+}
+
+.anydrop-uploads {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.anydrop-upload + .anydrop-upload {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--el-border-color-lighter, #ebeef5);
+}
+
+.anydrop-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.anydrop-upload-name {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.anydrop-upload-size {
+  font-size: 12px;
+  color: var(--anydrop-muted);
+  white-space: nowrap;
+}
+
+.anydrop-upload-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--el-color-danger, #f56c6c);
+}
+
+.anydrop-upload-link {
+  margin: 6px 0 0;
+  color: var(--anydrop-muted);
+}
+
+.anydrop-theme-current {
+  margin-left: 6px;
+  color: var(--el-color-primary, #409eff);
 }

@@ -11,6 +11,7 @@ public static class AdminEndpoints
         app.MapPost("/api/admin/login", LoginAsync);
         app.MapPost("/api/admin/logout", LogoutAsync);
         app.MapGet("/api/admin/files", ListFilesAsync);
+        app.MapPost("/api/admin/files", UploadFileAsync);
         app.MapPost("/api/admin/files/{id}/expiry", SetExpiryAsync);
         app.MapPost("/api/admin/files/{id}/pin", SetPinnedAsync);
         app.MapDelete("/api/admin/files/{id}", DeleteFileAsync);
@@ -147,6 +148,32 @@ public static class AdminEndpoints
         return result.Ok
             ? HttpJson.Json(new SimpleStatusResponse("deleted", id), AppJsonContext.Default.SimpleStatusResponse)
             : ApiErrors.From(result.Failure!.Value);
+    }
+
+    /// <summary>
+    /// 管理端从浏览器直接上传文件：原始字节体，文件名优先取 ?name=（URL 编码）——
+    /// XHR 的请求头值必须是 ByteString，放不下中文文件名。
+    /// 鉴权只用管理员会话 + CSRF，不需要任何 Bearer 密钥；配额不属于管理员，故不计入任何密钥。
+    /// </summary>
+    private static async Task<IResult> UploadFileAsync(
+        HttpContext context, SessionStore sessions, BlobService blobs, RateLimiter limiter, IpAccessor ipAccessor)
+    {
+        var admin = Admin(context, sessions);
+        if (admin is null) return NotLoggedIn();
+        if (!AdminAuth.CheckCsrf(context, admin)) return CsrfFailed();
+        if (!limiter.IsAllowed("upload:admin"))
+            return ApiErrors.Json(429, ErrorCodes.RateLimited, "请求过于频繁，请稍后重试");
+
+        var request = new UploadRequest(
+            null,
+            BlobEndpoints.ResolveFileName(context.Request),
+            context.Request.ContentType,
+            null,
+            context.Request.ContentLength ?? -1,
+            context.Request.Body,
+            ipAccessor.Get(context));
+
+        return await BlobEndpoints.ExecuteUploadAsync(request, blobs, context.RequestAborted);
     }
 
     private static async Task<IResult> ListTokensAsync(HttpContext context, SessionStore sessions, SqliteIndex index)

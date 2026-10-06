@@ -4,8 +4,12 @@ using Microsoft.Extensions.Logging;
 
 namespace AnyDrop.Server;
 
+/// <summary>
+/// Token 为 null 表示管理端上传：没有密钥身份，因此不占配额、不记 token 用量，
+/// 命名空间取 <see cref="TokenService.DefaultNamespace"/>，落库时用 <see cref="AdminUploadIdentity"/> 记账。
+/// </summary>
 public sealed record UploadRequest(
-    TokenRecord Token,
+    TokenRecord? Token,
     string? FileName,
     string? ContentType,
     string? IdempotencyKey,
@@ -26,14 +30,19 @@ public sealed class BlobService(
     private readonly SemaphoreSlim _uploadSlots =
         new(config.Server.MaxConcurrentUploads, config.Server.MaxConcurrentUploads);
 
-    public long EffectiveMaxUpload(TokenRecord token) =>
-        Math.Min(token.MaxFileBytes, config.Server.MaxUploadBytes);
+    public long EffectiveMaxUpload(TokenRecord? token) =>
+        token is null ? config.Server.MaxUploadBytes : Math.Min(token.MaxFileBytes, config.Server.MaxUploadBytes);
 
     public async Task<ServiceResult<UploadResponse>> UploadAsync(UploadRequest request, CancellationToken cancellationToken)
     {
         var token = request.Token;
-        if (!token.CanUpload)
+        if (token is not null && !token.CanUpload)
             return ServiceResult<UploadResponse>.Fail(403, ErrorCodes.ScopeDenied, "该密钥无权上传");
+
+        // 记账身份与命名空间：真实密钥，或管理端上传的哨兵身份 + 默认命名空间。
+        // 哨兵让管理端上传的文件与「建 token 时未指定命名空间」的密钥同处 default，现有读密钥立刻能取走。
+        var ownerId = token?.Id ?? AdminUploadIdentity.TokenId;
+        var ns = token?.Namespace ?? TokenService.DefaultNamespace;
         if (request.ContentLength < 0)
             return ServiceResult<UploadResponse>.Fail(411, ErrorCodes.LengthRequired, "上传必须带 Content-Length");
 
@@ -51,11 +60,17 @@ public sealed class BlobService(
         try
         {
             // 原子预占配额：并发的多个请求不会都读到同一个 used_bytes 快照而一起通过。
-            if (!await index.TryReserveQuotaAsync(token.Id, request.ContentLength, cancellationToken))
-                return ServiceResult<UploadResponse>.Fail(507, ErrorCodes.QuotaExceeded, "该密钥的存储配额已用尽");
-            reserved = true;
+            // 管理端上传不属于任何密钥，而配额是密钥的属性：对不存在的 token 行预占必然 0 行受影响，
+            // 所以这里必须整段跳过，否则超管会被自己的配额挡在 507 外面。
+            if (token is not null)
+            {
+                if (!await index.TryReserveQuotaAsync(token.Id, request.ContentLength, cancellationToken))
+                    return ServiceResult<UploadResponse>.Fail(507, ErrorCodes.QuotaExceeded, "该密钥的存储配额已用尽");
+                reserved = true;
+            }
 
-            if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+            // 幂等键按密钥记账，管理端上传不参与（哨兵身份没有可复用的重试语义）。
+            if (token is not null && !string.IsNullOrWhiteSpace(request.IdempotencyKey))
             {
                 var existingId = await index.GetIdempotentBlobIdAsync(token.Id, request.IdempotencyKey, cancellationToken);
                 if (existingId is not null)
@@ -106,7 +121,11 @@ public sealed class BlobService(
                     "请求体长度与 Content-Length 不一致");
             }
 
-            var idempotencyKey = string.IsNullOrWhiteSpace(request.IdempotencyKey) ? null : request.IdempotencyKey;
+            // 幂等键按密钥记账：没有密钥身份时既不查也不写，避免落下永远查不回来的行。
+            // 这个判断必须和上面的重放查询保持一致。
+            var idempotencyKey = token is null || string.IsNullOrWhiteSpace(request.IdempotencyKey)
+                ? null
+                : request.IdempotencyKey;
             BlobRecord? blob = null;
             for (var attempt = 0; attempt < 3 && blob is null; attempt++)
             {
@@ -135,8 +154,8 @@ public sealed class BlobService(
                     ChunkSize = encrypted.ChunkSize,
                     WrappedDek = encrypted.WrappedDek,
                     DekNonce = encrypted.DekNonce,
-                    TokenId = token.Id,
-                    Namespace = token.Namespace,
+                    TokenId = ownerId,
+                    Namespace = ns,
                     CreatedAt = Time.NowIso(),
                     ExpiresAt = Time.AddDaysIso(config.Retention.DefaultTtlDays),
                 };
@@ -163,16 +182,17 @@ public sealed class BlobService(
             }
 
             stored = true;
-            await index.InsertAuditAsync("blob.upload", token.Id, blob.Id, token.Namespace, request.Ip, blob.Size,
+            await index.InsertAuditAsync("blob.upload", ownerId, blob.Id, ns, request.Ip, blob.Size,
                 request.FileName, cancellationToken);
-            await index.TouchTokenAsync(token.Id, Time.NowIso(), cancellationToken);
+            if (token is not null) await index.TouchTokenAsync(token.Id, Time.NowIso(), cancellationToken);
 
             return ServiceResult<UploadResponse>.Success(ToUploadResponse(blob));
         }
         finally
         {
             // 预占了但没落盘（重放、报错、提前返回）就还回去；成功路径由预占量充当实际用量。
-            if (reserved && !stored)
+            // reserved 只可能在「有密钥身份」时置位（管理端上传不预占配额），非空判断只是让编译器满意。
+            if (reserved && !stored && token is not null)
             {
                 try
                 {

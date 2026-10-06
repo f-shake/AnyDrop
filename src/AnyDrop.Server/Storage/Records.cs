@@ -68,3 +68,14 @@ public static class TokenPresets
     public static bool IsKnown(string? preset) =>
         preset is null or AiWrite or MeRead or NasPull;
 }
+
+/// <summary>
+/// 管理端直接从浏览器上传时使用的记账身份。
+/// <see cref="BlobRecord.TokenId"/> 对应的列是 NOT NULL 且没有外键，而管理员上传不属于任何密钥，
+/// 只能落到这个哨兵值。它不会匹配任何真实 token 行（token id 是 13 位 Crockford Base32，字母表不含 'i'），
+/// 因此既不会占用任何密钥的配额，也不会出现在密钥列表里。
+/// </summary>
+public static class AdminUploadIdentity
+{
+    public const string TokenId = "admin";
+}

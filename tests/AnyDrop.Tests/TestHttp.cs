@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using AnyDrop.Server;
 using Xunit;
@@ -16,7 +17,8 @@ internal static class TestHttp
         string? fileName = "a.txt",
         string? idempotencyKey = null,
         string contentType = "application/octet-stream",
-        bool sendContentLength = true)
+        bool sendContentLength = true,
+        string? csrf = null)
     {
         var content = new ByteArrayContent(body);
         content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
@@ -25,9 +27,14 @@ internal static class TestHttp
         if (key is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
         if (fileName is not null) request.Headers.TryAddWithoutValidation("X-Filename", fileName);
         if (idempotencyKey is not null) request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
+        if (csrf is not null) request.Headers.TryAddWithoutValidation("X-CSRF-Token", csrf);
         if (!sendContentLength) request.Headers.TransferEncodingChunked = true;
         return request;
     }
+
+    /// <summary>上传内容的十六进制 SHA-256（小写）。</summary>
+    public static string Sha256(byte[] data) =>
+        Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
 
     public static async Task<UploadResponse> UploadOkAsync(
         HttpClient client, string key, byte[] body, string? fileName = "a.txt", string? idempotencyKey = null,

@@ -3,7 +3,9 @@ import { onMounted, ref } from 'vue'
 import { messageOf } from '@/api/client'
 import { login, logout, refreshSession, session } from '@/session'
 import FileTable from '@/components/FileTable.vue'
+import ThemeSwitch from '@/components/ThemeSwitch.vue'
 import TokenPanel from '@/components/TokenPanel.vue'
+import UploadPanel from '@/components/UploadPanel.vue'
 
 const username = ref('admin')
 const password = ref('')
@@ -54,15 +56,30 @@ function refreshAll() {
   fileTable.value?.reload()
   tokenPanel.value?.reload()
 }
+
+function onUploaded() {
+  fileTable.value?.reload()
+}
+
+/** 上传返回 401：会话已经失效，刷新一次状态让界面回到登录表单，别让人对着一直失败的上传发呆。 */
+async function onUnauthorized() {
+  try {
+    await refreshSession()
+  } catch {
+    // 与 logout() 保持一致的清理口径：三个字段一起清，别留下上个会话的用户名
+    session.authenticated = false
+    session.csrf = ''
+    session.username = ''
+  }
+}
 </script>
 
 <template>
-  <div class="anydrop-shell">
-    <div v-if="!ready" class="anydrop-card">加载中…</div>
+  <div class="anydrop-shell" :class="{ 'anydrop-shell--login': !session.authenticated }">
+    <div v-if="!ready" class="anydrop-card anydrop-login">加载中…</div>
 
     <div v-else-if="!session.authenticated" class="anydrop-card anydrop-login">
       <h1 class="anydrop-title">AnyDrop 管理</h1>
-      <p class="anydrop-subtitle">公网文件交换服务</p>
       <el-form label-position="top" @submit.prevent="submit">
         <el-form-item label="用户名">
           <el-input v-model="username" autocomplete="username" />
@@ -86,11 +103,13 @@ function refreshAll() {
           <h1 class="anydrop-title">AnyDrop 管理</h1>
           <p class="anydrop-subtitle">当前用户：{{ session.username || 'admin' }}</p>
         </div>
-        <div>
+        <div class="anydrop-actions">
+          <ThemeSwitch />
           <el-button @click="refreshAll">刷新</el-button>
           <el-button type="danger" plain @click="signOut">退出</el-button>
         </div>
       </div>
+      <UploadPanel @uploaded="onUploaded" @unauthorized="onUnauthorized" />
       <FileTable ref="fileTable" />
       <TokenPanel ref="tokenPanel" />
     </template>

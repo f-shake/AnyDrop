@@ -1,0 +1,34 @@
+{
+  "server": {
+    "urls": "http://127.0.0.1:8790",
+    "pathBase": "/drop",
+    "publicBaseUrl": "https://fshake.com/drop",
+    "maxUploadBytes": 268435456,
+    "maxConcurrentUploads": 4,
+    "sessionDays": 30,
+    "cookieSecure": true
+  },
+  "storage": {
+    "dataDir": "data",
+    "minFreeBytes": 2147483648,
+    "maxUsedPercent": 90
+  },
+  "crypto": {
+    "chunkSizeBytes": 1048576,
+    "masterKeyFile": ""
+  },
+  "retention": {
+    "defaultTtlDays": 30,
+    "gcIntervalMinutes": 10
+  },
+  "security": {
+    "maxLoginFailures": 10,
+    "lockoutMinutes": 15,
+    "rateLimitPerMinute": 120,
+    "loginGlobalPerMinute": 30,
+    "trustProxy": true
+  },
+  "admin": {
+    "username": "admin"
+  }
+}

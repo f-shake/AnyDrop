@@ -1,0 +1,36 @@
+# AnyDrop 反向代理样板
+#
+# 放到 VPS 现有 nginx 中 fshake.com 的 443 server{} 里（证书沿用现有配置）。
+# 关键点：proxy_pass 不带尾斜杠 → 保留 /drop 前缀，服务端用 UsePathBase("/drop") 处理，
+# 这样重定向、cookie 路径、前端资源 URL 全都不用额外配置。
+#
+# 需要同步的项：
+#   client_max_body_size  必须 ≥ 服务端 server:maxUploadBytes（默认 256 MiB），否则 nginx 先回 413
+#   proxy_request_buffering off  大文件上传不要先缓冲到 nginx 磁盘
+#   proxy_read_timeout/send_timeout  上传 256 MiB 可能跑很久
+
+# 让 /drop（无尾斜杠）也进得来
+location = /drop {
+    return 301 /drop/;
+}
+
+location /drop/ {
+    proxy_pass http://127.0.0.1:8790;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    client_max_body_size 256m;
+    proxy_request_buffering off;
+    proxy_buffering off;
+
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+
+    # 不要在这里加 add_header Cache-Control：nginx 是**追加**响应头，
+    # 加上去会盖掉应用给哈希静态资源发出的 public, max-age=31536000, immutable。
+    # 缓存策略由应用按响应类型决定（页面 no-store / index.html no-cache / assets 长缓存）。
+}

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AnyDrop.Server</RootNamespace>
+    <AssemblyName>AnyDrop.Server</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);IL2026;IL3050</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 下载页与兜底页跟着程序走，不依赖运行目录 -->
+    <EmbeddedResource Include="Pages\download.html" LogicalName="page/download.html" />
+    <EmbeddedResource Include="Pages\ui-not-built.html" LogicalName="page/ui-not-built.html" />
+    <!-- 前端产物只以“内嵌资源”形式进程序，不再作为静态内容重复发布 -->
+    <Content Remove="wwwroot\**" />
+    <None Remove="wwwroot\**" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- 纯自托管，不需要 IIS 相关产物 -->
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+    <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
+  </PropertyGroup>
+
+  <!-- 由 scripts/build-web.ps1 生成：把前端 dist 作为内嵌资源登记进来（带确定性 LogicalName）。 -->
+  <Import Project="wwwroot.g.props" Condition="Exists('wwwroot.g.props')" />
+
+</Project>

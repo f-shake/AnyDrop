@@ -1,0 +1,17 @@
+# 构建产物
+bin/
+obj/
+publish/
+publish-nonaot/
+*.user
+
+# 前端
+web/node_modules/
+web/dist/
+src/AnyDrop.Server/wwwroot/
+src/AnyDrop.Server/wwwroot.g.props
+
+# 运行时数据与密钥
+data/
+*.log
+.local-dev/

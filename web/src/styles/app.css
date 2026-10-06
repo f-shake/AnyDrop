@@ -1,0 +1,72 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f5f6f8;
+  color: #1f2328;
+}
+
+.anydrop-shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.anydrop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.anydrop-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.anydrop-subtitle {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 4px 0 0;
+}
+
+.anydrop-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  margin-bottom: 16px;
+}
+
+.anydrop-login {
+  max-width: 380px;
+  margin: 8vh auto 0;
+}
+
+.anydrop-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.anydrop-mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.anydrop-key {
+  font-family: ui-monospace, Consolas, monospace;
+  background: #f0f1f3;
+  padding: 8px 10px;
+  border-radius: 6px;
+  word-break: break-all;
+  font-size: 13px;
+}

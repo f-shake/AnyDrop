@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AnyDrop · 管理界面未构建</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: #f5f6f8; color: #1f2328; padding: 24px; }
+    .card { max-width: 520px; background: #fff; border-radius: 12px; padding: 28px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.08); }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    p { line-height: 1.7; font-size: 14px; }
+    code { background: #f0f1f3; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>管理界面未构建</h1>
+    <p>这个服务当前没有内嵌前端资源。请在源码目录执行：</p>
+    <p><code>pwsh ./scripts/build-web.ps1</code> 然后 <code>dotnet publish</code></p>
+    <p>如果是发布出来的单文件程序，说明打包时漏掉了前端构建产物。文件交换接口不受影响。</p>
+  </main>
+</body>
+</html>

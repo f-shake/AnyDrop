@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>AnyDrop · 文件交换</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: #f5f6f8; color: #1f2328; padding: 24px;
+    }
+    @media (prefers-color-scheme: dark) { body { background: #16181d; color: #e6e8eb; } }
+    .card {
+      width: 100%; max-width: 460px; background: #fff; border-radius: 12px; padding: 28px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, .08);
+    }
+    @media (prefers-color-scheme: dark) { .card { background: #1f2229; box-shadow: none; } }
+    h1 { font-size: 18px; margin: 0 0 16px; }
+    p { line-height: 1.6; font-size: 14px; margin: 8px 0; }
+    label { display: block; font-size: 13px; margin: 16px 0 6px; }
+    input[type=password] {
+      width: 100%; padding: 10px 12px; font-size: 14px; border: 1px solid #c9ced6;
+      border-radius: 8px; background: transparent; color: inherit;
+    }
+    button, .button {
+      display: inline-block; margin-top: 18px; width: 100%; padding: 11px 16px; font-size: 15px;
+      border: 0; border-radius: 8px; background: #2f6feb; color: #fff; cursor: pointer;
+      text-align: center; text-decoration: none;
+    }
+    .meta { font-size: 12px; color: #6b7280; word-break: break-all; margin-top: 6px; }
+    .error { color: #c0392b; font-size: 13px; margin-top: 12px; }
+    .hash { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+{{CONTENT}}
+  </main>
+</body>
+</html>

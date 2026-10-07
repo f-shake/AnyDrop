@@ -5,9 +5,32 @@
 # 这样重定向、cookie 路径、前端资源 URL 全都不用额外配置。
 #
 # 需要同步的项：
-#   client_max_body_size  必须 ≥ 服务端 server:maxUploadBytes（默认 256 MiB），否则 nginx 先回 413
+#   client_max_body_size  必须 ≥ 服务端 server:maxUploadBytes（默认 256 MiB = 268435456），否则 nginx 先回 413
 #   proxy_request_buffering off  大文件上传不要先缓冲到 nginx 磁盘
 #   proxy_read_timeout/send_timeout  上传 256 MiB 可能跑很久
+#
+# ---------------------------------------------------------------------------
+# 【可选的第二道防线】把访问日志里的下载 id 打码
+#
+# 为什么需要：下载链接里的 id 就是下载凭证，nginx 默认会把它原样写进 access.log。
+# 应用侧在 anydrop.json 里关掉的只是「每个请求都记一行 URL」那条 Information 日志 —— Warning/Error
+# 级的应用日志仍可能带 id（见 RUNBOOK-WINDOWS.md 第 2 步），所以别把应用侧当成"泄漏面已经关掉了"。
+# 这里挡的是另一个面：nginx 自己那份 access.log，让它不至于成为一份链接清单。
+#
+# ⚠ 下面 map 与 log_format 两段必须放在 nginx.conf 的 **http{}** 里，不是 server{} 里。
+# ⚠ 顺序不能反：先加好这两段并 nginx -t 通过，再去 location 里取消 access_log 那行的注释。
+#    反了的话 nginx 会因为 "unknown log format \"anydrop\"" 而拒绝启动/reload。
+#
+# map $request_uri $anydrop_log_uri {
+#     ~^/drop/v1/blobs/  /drop/v1/blobs/[id-masked];
+#     ~^/drop/f/         /drop/f/[id-masked];
+#     default            $request_uri;
+# }
+#
+# log_format anydrop '$remote_addr - $remote_user [$time_local] '
+#                    '"$request_method $anydrop_log_uri $server_protocol" '
+#                    '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
+# ---------------------------------------------------------------------------
 
 # 让 /drop（无尾斜杠）也进得来
 location = /drop {
@@ -33,4 +56,8 @@ location /drop/ {
     # 不要在这里加 add_header Cache-Control：nginx 是**追加**响应头，
     # 加上去会盖掉应用给哈希静态资源发出的 public, max-age=31536000, immutable。
     # 缓存策略由应用按响应类型决定（页面 no-store / index.html no-cache / assets 长缓存）。
+
+    # 要用上面 http{} 里定义的 anydrop 日志格式（id 打码）时，把下面这行取消注释。
+    # 必须先加好 http{} 的 map + log_format，否则 nginx 起不来。
+    # access_log logs/anydrop.access.log anydrop;
 }

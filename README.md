@@ -51,7 +51,8 @@ curl -o report.md https://fshake.com/drop/v1/blobs/<id>
 想看元数据（大小 / sha256 / 过期时间）可以打开 `https://fshake.com/drop/f/<id>`：服务端直出的信息页，同样不需要密钥。
 该页时间按 **UTC** 显示（收件人时区未知），而管理面板里的时间按**浏览器本地时区**显示 —— 格式相同、时区刻意不同。
 
-更详细的接口说明见 [docs/AGENT_UPLOAD.md](docs/AGENT_UPLOAD.md)，部署步骤见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+更详细的接口说明见 [docs/AGENT_UPLOAD.md](docs/AGENT_UPLOAD.md)，部署步骤见 [docs/DEPLOY.md](docs/DEPLOY.md)，
+Windows Server 上从拿到发布包到公网可用的逐步路书见 [deploy/RUNBOOK-WINDOWS.md](deploy/RUNBOOK-WINDOWS.md)。
 
 ## 密钥模型
 
@@ -96,16 +97,23 @@ docs/                 计划、接口说明、部署步骤
 ## 常用命令
 
 ```powershell
-dotnet build AnyDrop.slnx                       # 编译（含 AOT 分析器，0 警告）
+dotnet build AnyDrop.slnx                       # 编译（含 AOT 分析器，正常应 0 警告）
+                                                # 注意：服务正在跑时 exe 被锁，会以 MSB3027 失败 —— 先停服务
 dotnet run  --project tests/AnyDrop.Tests       # 跑全部测试（xunit v3 进程内运行器）
 cd web && npm run typecheck && npm run test     # 前端类型检查与单测
 pwsh ./scripts/build-all.ps1                    # 前端 + 服务端一起发布（win-x64）
+pwsh ./scripts/pack-win.ps1                     # 打出可拷到 Windows VPS 的发布包（release/ + zip）
 ./scripts/build-web.sh                          # Linux/macOS 等价的前端构建 + 内嵌清单生成
 pwsh ./scripts/publish-win.ps1 -NoAot           # 没有原生链接器时退回自包含单文件
 ```
 
 ### 发布前置条件
 
+- **`scripts/*.ps1` 必须在 PowerShell 7（`pwsh`）下运行。** Windows PowerShell 5.1 会在**解析阶段**
+  就失败：这几个脚本是无 BOM 的 UTF-8 且含中文，5.1 按 ANSI(cp936) 解码后引号会错位，报出来的是一串
+  乱码语法错；而且 `build-web.ps1` 用到 `[System.IO.Path]::GetRelativePath`，那是 .NET Core 2.0+ 的
+  API，5.1（.NET Framework）没有。`pack-win.ps1` 开头会直接拦住并提示改用 `pwsh`。
+  Linux/macOS 用等价的 `.sh` 脚本。
 - **Native AOT 需要本机有原生链接器**：Windows 需要 Visual Studio 的「使用 C++ 的桌面开发」工作负载；
   Linux 需要 `clang` 与 `zlib1g-dev`。缺工具链时 `publish-win.ps1` 会失败并提示改用 `-NoAot`。
 - Linux 发布请在 Linux 上执行 `scripts/publish-linux.sh`：**AOT 不支持跨操作系统交叉编译**。

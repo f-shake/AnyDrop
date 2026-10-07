@@ -29,5 +29,12 @@
   },
   "admin": {
     "username": "admin"
+  },
+  "logging": {
+    "logLevel": {
+      "default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "AnyDrop.Server.Storage.BlobStore": "Warning"
+    }
   }
 }

@@ -3,6 +3,7 @@ bin/
 obj/
 publish/
 publish-nonaot/
+release/
 *.user
 
 # 前端

@@ -47,6 +47,44 @@ public sealed class AdminOptions
     public string Username { get; set; } = "admin";
 }
 
+/// <summary>
+/// 文件日志的**运维参数**。级别不在这一类里：级别仍然只由 <c>logging:logLevel</c>（MS 约定）
+/// 与 <c>ANYDROP__Logging__LogLevel__*</c> 决定，Serilog 侧不做二次过滤。
+/// </summary>
+public sealed class LogFileOptions
+{
+    /// <summary>滚动周期的合法取值（与 Serilog 的 RollingInterval 同名，不区分大小写）。</summary>
+    public static readonly string[] RollingIntervalNames = ["Infinite", "Year", "Month", "Day", "Hour", "Minute"];
+
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>日志目录；相对路径按程序所在目录解析。</summary>
+    public string Directory { get; set; } = "logs";
+
+    /// <summary>
+    /// 文件名前缀。实际文件名由 <see cref="RollingInterval"/> 决定：
+    /// <c>Day</c> → <c>{前缀}{yyyyMMdd}.log</c>，<c>Year/Month/Hour/Minute</c> 用对应长度的日期后缀，
+    /// <c>Infinite</c> → <c>{前缀}.log</c>（**没有**日期后缀，所以不会换文件；配合不限大小就是无限增长）。
+    /// </summary>
+    public string FileNamePrefix { get; set; } = "server-";
+
+    public string RollingInterval { get; set; } = "Day";
+
+    /// <summary>保留文件数上限（**含**正在写的那个）。0 表示不限。</summary>
+    public int RetainedFileCountLimit { get; set; } = 14;
+
+    /// <summary>单文件字节上限。0 表示不限。</summary>
+    public long FileSizeLimitBytes { get; set; } = 32L * 1024 * 1024;
+
+    /// <summary>到达大小上限时换新文件。false 时该文件到下一个滚动点前不再写入（会静默丢日志）。</summary>
+    public bool RollOnFileSizeLimit { get; set; } = true;
+
+    public bool Buffered { get; set; }
+
+    /// <summary>定期 flush 到磁盘的间隔秒数。0 表示不启用。</summary>
+    public int FlushToDiskIntervalSeconds { get; set; }
+}
+
 public sealed class AppConfig
 {
     public ServerOptions Server { get; init; } = new();
@@ -55,9 +93,13 @@ public sealed class AppConfig
     public RetentionOptions Retention { get; init; } = new();
     public SecurityOptions Security { get; init; } = new();
     public AdminOptions Admin { get; init; } = new();
+    public LogFileOptions LogFile { get; init; } = new();
 
     /// <summary>绝对路径的数据目录。</summary>
     public string DataDir { get; init; } = "";
+
+    /// <summary>绝对路径的日志目录（仅当 <see cref="LogFileOptions.Enabled"/> 为真时会去创建）。</summary>
+    public string LogDirectory { get; init; } = "";
     public string BlobsDir => Path.Combine(DataDir, "blobs");
     public string TempDir => Path.Combine(DataDir, "tmp");
     public string DbPath => Path.Combine(DataDir, "anydrop.db");
@@ -109,6 +151,29 @@ public static class ConfigLoader
             TrustProxy = Bool(c, "security:trustProxy", true),
         };
         var admin = new AdminOptions { Username = Str(c, "admin:username", "admin") };
+        var logFile = new LogFileOptions
+        {
+            Enabled = Bool(c, "logging:file:enabled", true),
+            Directory = Str(c, "logging:file:directory", "logs"),
+            FileNamePrefix = Str(c, "logging:file:fileNamePrefix", "server-"),
+            RollingInterval = Str(c, "logging:file:rollingInterval", "Day"),
+            RetainedFileCountLimit = Int(c, "logging:file:retainedFileCountLimit", 14),
+            FileSizeLimitBytes = Long(c, "logging:file:fileSizeLimitBytes", 32L * 1024 * 1024),
+            RollOnFileSizeLimit = Bool(c, "logging:file:rollOnFileSizeLimit", true),
+            Buffered = Bool(c, "logging:file:buffered", false),
+            FlushToDiskIntervalSeconds = Int(c, "logging:file:flushToDiskIntervalSeconds", 0),
+        };
+
+        // 本批新增的这几个键走"严格取值"：写了却解析不了就报错，而不是像 Bool/Int/Long 那样静默回落默认值。
+        // 既有的共享辅助方法保持原语义不动（改它们会影响所有既有配置的兼容性），但新增键上
+        // "enabled: 0 / buffered: no / fileSizeLimitBytes: 32MB" 静默变成 true/false/默认值是不能接受的
+        // —— 文档明确承诺"配置写错会在启动时报错，不会静默"。
+        foreach (var key in new[] { "logging:file:enabled", "logging:file:rollOnFileSizeLimit", "logging:file:buffered" })
+            RequireParsable(c, key, v => bool.TryParse(v, out _));
+        foreach (var key in new[] { "logging:file:retainedFileCountLimit", "logging:file:flushToDiskIntervalSeconds" })
+            RequireParsable(c, key, v => int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out _));
+        RequireParsable(c, "logging:file:fileSizeLimitBytes",
+            v => long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out _));
 
         var pathBase = NormalizePathBase(server.PathBase);
         server.PathBase = pathBase;
@@ -134,6 +199,25 @@ public static class ConfigLoader
         if (security.LoginGlobalPerMinute < 1)
             throw new InvalidOperationException("security:loginGlobalPerMinute 必须大于 0");
 
+        var interval = Array.Find(LogFileOptions.RollingIntervalNames,
+            n => string.Equals(n, logFile.RollingInterval, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException(
+                $"logging:file:rollingInterval 必须是 {string.Join(" / ", LogFileOptions.RollingIntervalNames)} 之一");
+        logFile.RollingInterval = interval;
+        // directory / fileNamePrefix 的"不能为空"**不需要**校验：Str() 对 null/空白一律回落默认值，
+        // 这两个字段走到这里不可能为空（写 "" 等于没写）。空串回落默认值的行为由测试钉住。
+        if (logFile.FileNamePrefix.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || logFile.FileNamePrefix.Contains('/')
+            || logFile.FileNamePrefix.Contains('\\')
+            || logFile.FileNamePrefix.Contains("..", StringComparison.Ordinal))
+            throw new InvalidOperationException("logging:file:fileNamePrefix 不能包含路径分隔符或非法文件名字符");
+        if (logFile.RetainedFileCountLimit < 0)
+            throw new InvalidOperationException("logging:file:retainedFileCountLimit 不能为负（0 表示不限）");
+        if (logFile.FileSizeLimitBytes < 0)
+            throw new InvalidOperationException("logging:file:fileSizeLimitBytes 不能为负（0 表示不限）");
+        if (logFile.FlushToDiskIntervalSeconds < 0)
+            throw new InvalidOperationException("logging:file:flushToDiskIntervalSeconds 不能为负（0 表示不启用）");
+
         var dataDir = ResolvePath(storage.DataDir);
         var masterKeyPath = crypto.MasterKeyFile.Length == 0
             ? Path.Combine(dataDir, "master.key")
@@ -147,7 +231,9 @@ public static class ConfigLoader
             Retention = retention,
             Security = security,
             Admin = admin,
+            LogFile = logFile,
             DataDir = dataDir,
+            LogDirectory = ResolvePath(logFile.Directory),
             MasterKeyPath = masterKeyPath,
             PathBase = pathBase,
         };
@@ -188,4 +274,17 @@ public static class ConfigLoader
 
     private static bool Bool(IConfiguration c, string key, bool fallback) =>
         c[key] is { Length: > 0 } v && bool.TryParse(v, out var parsed) ? parsed : fallback;
+
+    /// <summary>
+    /// 配置里**写了这个键**却解析不了就报错，而不是像 <see cref="Bool"/>/<see cref="Int"/>/<see cref="Long"/>
+    /// 那样静默回落默认值。只用于本批新增的 <c>logging:file:*</c> —— 既有的共享辅助方法保持原语义不动
+    /// （改它们等于改变所有既有配置的兼容性）。
+    /// </summary>
+    private static void RequireParsable(IConfiguration c, string key, Func<string, bool> tryParse)
+    {
+        var v = c[key];
+        if (!string.IsNullOrWhiteSpace(v) && !tryParse(v))
+            throw new InvalidOperationException(
+                $"{key} 的值无法解析：'{v}'（这里不会静默回落默认值，请改成合法值）");
+    }
 }

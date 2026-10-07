@@ -20,6 +20,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.3" />
+    <!-- 文件日志只装这三件。刻意**不**装 Serilog.AspNetCore：它会传递带入
+         Serilog.Settings.Configuration + Microsoft.Extensions.DependencyModel（反射式配置，
+         AOT 运行期无官方声明），而且它的 UseSerilogRequestLogging 默认把 {RequestPath} 写进日志
+         —— 本项目的下载 id 就在 path 里，那是凭证。
+         ⚠ 接线写法见 Program.cs：必须是 "注册一个 ILoggerProvider 交给容器托管"，
+         **不要**用 Logging.AddSerilog(...) —— 实测那样加进来的 provider 不受 MS 级别过滤器约束，
+         于是 Logging:LogLevel（含 ANYDROP__Logging__LogLevel__*）会整体失效、逐请求日志会带着 id 落盘。 -->
+    <PackageReference Include="Serilog" Version="4.4.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageReference Include="Serilog.Extensions.Logging" Version="9.0.0" />
   </ItemGroup>
 
   <ItemGroup>

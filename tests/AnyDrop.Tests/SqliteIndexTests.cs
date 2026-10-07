@@ -1,6 +1,5 @@
 using AnyDrop.Server;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace AnyDrop.Tests;
@@ -24,7 +23,7 @@ public sealed class SqliteIndexTests : IDisposable
 
     private async Task<SqliteIndex> NewIndexAsync()
     {
-        var index = new SqliteIndex(Config, NullLogger<SqliteIndex>.Instance);
+        var index = new SqliteIndex(Config);
         await index.InitializeAsync();
         return index;
     }
@@ -93,7 +92,7 @@ public sealed class SqliteIndexTests : IDisposable
             await create.ExecuteNonQueryAsync();
         }
 
-        var index = new SqliteIndex(Config, NullLogger<SqliteIndex>.Instance);
+        var index = new SqliteIndex(Config);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => index.InitializeAsync());
 
         // 报错必须点名路径与版本，而不是「先建表、写到一半才炸」

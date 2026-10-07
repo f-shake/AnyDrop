@@ -39,8 +39,23 @@ $stage = Join-Path $root "$Output/AnyDrop"
 
 # --- 1. 构建 ---------------------------------------------------------------
 if ($SkipBuild) {
-    if (-not (Test-Path (Join-Path $stage 'AnyDrop.Server.exe'))) {
+    $stagedExe = Join-Path $stage 'AnyDrop.Server.exe'
+    if (-not (Test-Path $stagedExe)) {
         throw "-SkipBuild 需要 $stage 里已经有 AnyDrop.Server.exe，但没找到。"
+    }
+    # 守卫：-SkipBuild 复用的是**已经躺在那儿**的 exe。若源码比它新，这个包就会变成"新脚本/新前端 + 旧 exe"
+    # —— 路书讲的是新行为，exe 却还是旧的（例如日志文件名都换了，exe 却不写文件日志）。
+    # web/ 也要看：前端产物在 publish 时经 wwwroot.g.props 被编进 exe。
+    $exeTime = (Get-Item $stagedExe).LastWriteTimeUtc
+    $scanRoots = @((Join-Path $root 'src'), (Join-Path $root 'web'))
+    $newer = Get-ChildItem $scanRoots -Recurse -File -ErrorAction SilentlyContinue |
+             Where-Object { $_.LastWriteTimeUtc -gt $exeTime -and
+                            $_.FullName -notmatch '\\(bin|obj|node_modules|dist)\\' } |
+             Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($newer) {
+        throw ("-SkipBuild 复用的 exe（$($exeTime.ToString('u'))）比源码旧：$($newer.FullName) 是 " +
+               "$($newer.LastWriteTimeUtc.ToString('u'))。请去掉 -SkipBuild 重新构建，" +
+               "否则会打出'新脚本 + 旧 exe'的错配包。")
     }
     Write-Host "==> 跳过构建，复用 $stage 里的二进制" -ForegroundColor Yellow
 }

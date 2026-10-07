@@ -1,5 +1,4 @@
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Logging;
 
 namespace AnyDrop.Server;
 
@@ -8,9 +7,8 @@ public sealed class SqliteIndex
 {
     private readonly string _connectionString;
     private readonly string _dbPath;
-    private readonly ILogger<SqliteIndex> _logger;
 
-    public SqliteIndex(AppConfig config, ILogger<SqliteIndex> logger)
+    public SqliteIndex(AppConfig config)
     {
         _dbPath = config.DbPath;
         _connectionString = new SqliteConnectionStringBuilder
@@ -19,7 +17,6 @@ public sealed class SqliteIndex
             DefaultTimeout = 30,
             Pooling = true,
         }.ToString();
-        _logger = logger;
     }
 
     private static readonly string[] Ddl =

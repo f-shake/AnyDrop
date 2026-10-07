@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AnyDrop.Server;
 
@@ -50,7 +49,7 @@ internal static class Cli
             return 2;
         }
 
-        var index = new SqliteIndex(config, NullLogger<SqliteIndex>.Instance);
+        var index = new SqliteIndex(config);
         try
         {
             await index.InitializeAsync();

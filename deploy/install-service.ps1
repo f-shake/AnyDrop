@@ -83,7 +83,7 @@ $script:registeredNow = -not $existed
 # 自检失败时统一收尾：本次新建的任务就回滚，之前就存在的不动它（那可能是别人正在用的服务）。
 function Fail-SelfCheck([string]$reason) {
     Write-Host "自检失败：$reason" -ForegroundColor Red
-    Write-Host "看日志：$InstallDir\logs\server.log" -ForegroundColor Yellow
+    Write-Host "看日志：$InstallDir\logs\server-*.log（应用日志）与 $InstallDir\logs\bootstrap.log（进程 stdout 与 cmd 层失败）" -ForegroundColor Yellow
     Write-Host "看任务历史：事件查看器 → 应用程序和服务日志 → Microsoft → Windows → TaskScheduler → Operational" -ForegroundColor Yellow
     if ($script:registeredNow) {
         Write-Host "本次新建的任务已回滚（Unregister-ScheduledTask $TaskName）—— 修好问题后重新运行本脚本。" -ForegroundColor Yellow

@@ -84,8 +84,32 @@ Get-Content C:\AnyDrop\anydrop.json
 | `BlobService.cs` 密文与元数据不一致、打开密文失败、审计写入失败 | Error / Warning | `{BlobId}` 或 `{Path}`（类别**不在**过滤名单里） |
 | `Middleware.cs` 未处理异常 | Error | `{Path}` = 原始请求路径，含 id |
 
-所以 **`logs\server.log` 要当成"含凭证的文件"对待**：别放共享盘，别贴进聊天/工单/Issue，
+所以 **`logs\` 下的日志文件都要当成"含凭证的文件"对待**：别放共享盘，别贴进聊天/工单/Issue，
 要给人看排障时只贴相关几行。彻底的做法是改代码不再打印 id（本版未做）。
+
+### 2.1 `logs\` 下的两个文件：谁写、怎么滚、怎么 tail
+
+| 文件 | 谁写 | 滚动与保留 |
+| --- | --- | --- |
+| `logs\server-<日期>.log` | **应用自己**（Serilog 文件 sink） | 滚动周期、保留份数与单文件上限由 `logging:file` 决定（默认按天、14 份、32 MiB）；到大小上限换新文件 |
+| `logs\bootstrap.log` | `service-run.cmd`（把进程的 stdout/stderr 重定向过来） | 超过 32 MiB 改名为 `bootstrap.previous.log`（只留一份） |
+
+- 应用日志**每条以一行开始**：本地时间戳 + 时区 + 级别 + 来源类别 + 消息，例如：
+  `2026-10-07 13:16:35.710 +08:00 [INF] AnyDrop.Server.Storage.BlobStore: …`
+  —— 方括号里是级别（`INF`/`WRN`/`ERR`），冒号前是来源类别，便于按模块过滤。
+  ⚠ **带异常的条目后面会跟堆栈多行**（输出模板末尾是 `{Exception}`，消息里的换行也不转义），
+  所以 `Select-String` 出来的「行数 ≠ 事件数」；要数事件就数带时间戳前缀的那些行。
+- 文件名跟着 `rollingInterval` 走：`Day` → `server-20261007.log`、`Hour` → `server-2026100713.log`；
+  若配成 `Infinite` 则**没有日期段**，就是 `server-.log`（且不会自动换文件，配合不限大小会一直长）。
+- 第二个实例若与第一个写同一个文件，Serilog **不会失败**，而是改用 `server-<日期>_001.log`（还有 `_002`…）。
+  这多出来的文件同样占 `retainedFileCountLimit` 的份数，所以正常只应有一个实例在跑。
+- **为什么保留 bootstrap**：如果进程在日志系统起来之前就死了（漏拷 `e_sqlite3.dll`、exe 被搬走），
+  那时只有 stdout 里有东西可看。排障时两个都要看。
+- ⚠ **tail 的坑**：Serilog 持有 `server-*.log` 的**写**句柄且只共享"读"，而 Windows 要求双向兼容 ——
+  `Get-Content` 能正常读（它用 `FileShare.ReadWrite`），但**用 `File.ReadAllText` 这类默认只共享读的方式会报
+  "being used by another process"**。自己写脚本读日志时注意这一点。
+- 升级到本版之后，**旧的 `logs\server.log` 与 `server.previous.log` 不再更新**（它们是老方案的产物，
+  且含凭证）：确认不需要后可自行删除。
 
 ⚠ **如果你要给 `service-run.cmd` 加环境变量，名字必须带 `ANYDROP__` 前缀**
 （`ANYDROP__Logging__LogLevel__...`）。写成裸的 `Logging__LogLevel__...` **完全没有作用** ——
@@ -249,15 +273,21 @@ powershell -ExecutionPolicy Bypass -File .\install-service.ps1
 Stop-ScheduledTask  -TaskName AnyDrop    # 停
 Start-ScheduledTask -TaskName AnyDrop    # 起
 Get-ScheduledTask   -TaskName AnyDrop | Select-Object TaskName,State
-Get-Content C:\AnyDrop\logs\server.log -Tail 30 -Wait   # 跟着看日志
+Get-Content C:\AnyDrop\logs\server-*.log -Tail 30 -Wait   # 跟着看应用日志
+Get-Content C:\AnyDrop\logs\bootstrap.log -Tail 30        # 看进程 stdout 与 cmd 层失败
 ```
 
+> ⚠ `-Wait` 只跟**启动时已经存在的那批文件**：应用按天滚动，过零点换到新文件后，这条命令会一直等在不更新的
+> 旧文件上（不报错也不退出，容易被误读成"没流量"）。要看固定目标就用 `bootstrap.log`，
+> 或者过零点后把上面那条重跑一次。
+>
 > 手工测试服务路径时**必须用全路径**：`cmd /c C:\AnyDrop\service-run.cmd`。
 > 如果这台机器设了 `NoDefaultCurrentDirectoryInExePath=1`，`cmd /c service-run.cmd` 会报
 > "不是内部或外部命令" —— 计划任务用的是全路径，不受影响。
 >
 > ⚠ 但**别在任务正在跑的时候手工执行它**：`service-run.cmd` 自己不检查单实例，第二个实例会和
-> 计划任务起的那个抢 8790 端口、抢同一个 `logs\server.log`。要手工试就先 `Stop-ScheduledTask`，
+> 计划任务起的那个抢 8790 端口、并和它交错写同一个 `logs\bootstrap.log`（不会互相失败，但两边的行会串在一起）。
+> 要手工试就先 `Stop-ScheduledTask`，
 > 或者干脆在装任务之前试；只是想知道"起没起来"，用 `Start-ScheduledTask` + 看日志。
 
 ---
@@ -375,7 +405,7 @@ Invoke-WebRequest -Uri $j.url -OutFile "$env:TEMP\anydrop-out.bin" -UseBasicPars
 ### 9.4 关键安全断言：逐请求日志必须被压掉
 
 ```powershell
-Select-String -Path C:\AnyDrop\logs\server.log -Pattern 'Request starting'   # 期望：无输出
+Select-String -Path C:\AnyDrop\logs\server-*.log -Pattern 'Request starting'   # 期望：无输出
 ```
 
 **这条必须没有任何输出。** 有输出就意味着日志正在积累可用的下载链接 —— 去第 2 步确认
@@ -386,7 +416,7 @@ Select-String -Path C:\AnyDrop\logs\server.log -Pattern 'Request starting'   # �
 只要发生过一次 Warning/Error（删密文失败、密文与元数据不一致、一个未处理异常），id 就会出现在
 日志里 —— 过滤器管不到那些级别（第 2 步列了具体位置）。这条断言能证明的只有"逐请求日志已经关掉"。
 
-配套动作因此是：把 `logs\server.log` 当含凭证的文件管，排障要外发时只贴相关几行。
+配套动作因此是：把 `logs\` 下的日志文件当含凭证的文件管，排障要外发时只贴相关几行。
 
 ### 9.5 手机
 
@@ -415,8 +445,14 @@ Stop-ScheduledTask -TaskName AnyDrop
 Copy-Item <新包>\AnyDrop.Server.exe C:\AnyDrop\ -Force
 Copy-Item <新包>\e_sqlite3.dll     C:\AnyDrop\ -Force
 Start-ScheduledTask -TaskName AnyDrop
-Get-Content C:\AnyDrop\logs\server.log -Tail 10
+Get-Content C:\AnyDrop\logs\bootstrap.log -Tail 20     # 先看这个：启动早期的失败只在这里
+Get-Content C:\AnyDrop\logs\server-*.log -Tail 10      # 再看应用日志
 ```
+
+> ⚠ **`server-*.log` 不存在不代表服务没起来**：应用日志文件是**首次写入时才创建**的，
+> 而"AnyDrop 启动"那条又在数据库初始化之后。启动失败的真因（JSON 写坏、漏拷 `e_sqlite3.dll`）
+> 只留在 `bootstrap.log` 里 —— 命令报 `Cannot find path ... because it does not exist` 时，
+> 请先看 `bootstrap.log` 里有没有 `exited with code` 或 `[Serilog SelfLog]` 行。
 
 数据表结构由程序启动时建立，**当前结构版本 v2**。遇到版本不匹配的旧库，程序会拒绝启动并打印
 可操作的提示（不自动迁移）—— 按提示处理，不要盲目删数据。
@@ -435,10 +471,13 @@ Get-Content C:\AnyDrop\logs\server.log -Tail 10
 | 上传返回 **413** | nginx `client_max_body_size` 小于服务端 `maxUploadBytes` |
 | 大文件上传卡住/中断 | nginx 没关 `proxy_request_buffering`，或 `proxy_read_timeout` 太短 |
 | 上传报磁盘相关错误 | `storage.minFreeBytes`（默认 2 GiB）水位线被触发，或 `maxUsedPercent`（默认 90%）到了 |
-| **502 Bad Gateway** | 服务没在跑：`Get-ScheduledTask -TaskName AnyDrop`、`Get-Content C:\AnyDrop\logs\server.log -Tail 30` |
-| 任务状态是"正在运行"但端口没监听 | 看 `logs\server.log`：常见是漏拷 `e_sqlite3.dll`、`data` 目录权限不足、或表结构版本不匹配 |
-| 日志末尾 `exited with code 9009` | 找不到 `AnyDrop.Server.exe`：解包不完整、`-InstallDir` 指错目录，或 exe 被搬走了。cmd 自己那句"不是内部或外部命令"也在这行**上面**（stderr 被 `service-run.cmd` 重定向进了日志），先往上翻两行看它指的是哪个路径 |
-| 任务"上次运行结果"不是 `0x0` | 服务非正常退出，退出码就是 `logs\server.log` 末尾那行 `exited with code N`。崩了之后计划任务会在 1 分钟后自动重启，最多 5 次；连续失败就看日志最后一屏 |
+| **502 Bad Gateway** | 服务没在跑：`Get-ScheduledTask -TaskName AnyDrop`、`Get-Content C:\AnyDrop\logs\bootstrap.log -Tail 30`、`Get-Content C:\AnyDrop\logs\server-*.log -Tail 30` |
+| 任务状态是"正在运行"但端口没监听 | 看 `logs\bootstrap.log`（进程 stdout）与 `logs\server-*.log`：常见是漏拷 `e_sqlite3.dll`、`data` 目录权限不足、或表结构版本不匹配 |
+| 日志末尾 `exited with code 9009` | 找不到 `AnyDrop.Server.exe`：解包不完整、`-InstallDir` 指错目录，或 exe 被搬走了。cmd 自己那句"不是内部或外部命令"也在这行**上面**（stderr 被 `service-run.cmd` 重定向进了 `logs\bootstrap.log`），先往上翻两行看它指的是哪个路径 |
+| 任务"上次运行结果"不是 `0x0` | 服务非正常退出，退出码就是 `logs\bootstrap.log` 末尾那行 `exited with code N`。崩了之后计划任务会在 1 分钟后自动重启，最多 5 次；连续失败就看日志最后一屏 |
+| 读日志报 `being used by another process` | 用 `Get-Content`（共享读写）；用 `File.ReadAllText` 之类默认只共享读的方式读正在写的 `server-*.log` 会被拒 —— 见第 2.1 节 |
+| 进程在跑，但 `logs\server-*.log` 一个字节都没有 | 应用日志文件是**首次写入时才创建**的。先看 `logs\bootstrap.log`：Serilog 的 sink 写失败只进 SelfLog（`[Serilog SelfLog] ... is denied` 之类），而 stderr 正好被重定向进那里。会真正留下"没有应用日志"的只有两种：**目标文件被拒写**（只读、ACL）或**目标位置被同名目录占住**。⚠ 目标只是被别的进程**占着**不算 —— 那种情况 sink 会顺移 `server-<日期>_001.log` 并照常写入（见第 2.1 节） |
+| `logs\` 建不出来，或 `bootstrap.log` 打不开（ACL / 同名文件或目录占位 / 只读） | `service-run.cmd` 会跳过重定向、照样把服务起起来，退出码仍来自服务进程。**两种情形的后果不一样，别互相误导**：`bootstrap.log` 打不开 → 丢的只是**控制台镜像**，**应用自己的** `logs\server-*.log` 照常写；`logs\` 整个建不出来 → 连应用日志也没有（应用侧会自行降级成"仅控制台"，并在控制台打 `警告：日志文件不可用（…）`；那行同样只在手工运行时看得到）。脚本会在 stderr 打一行 `WARNING: cannot write ...` —— ⚠ 但那行**只在手工 `cmd /c C:\AnyDrop\service-run.cmd` 时看得到**，计划任务起的进程 stderr 没有接收者。用 `icacls C:\AnyDrop` 检查权限，并确认 `logs` 是目录、`logs\bootstrap.log` 是可写的普通文件 |
 | 日志里出现 `blobs/xx/<id>` 或 `{BlobId}` 字样 | 这是 Warning/Error 级日志，过滤器压不掉（第 2 步有说明）。属已知残留风险：日志文件按"含凭证"对待，外发只贴相关几行 |
 | 计划任务启动失败（事件查看器） | 任务历史：事件查看器 → 应用程序和服务日志 → Microsoft → Windows → TaskScheduler → Operational |
 | 下载 404 但文件刚传过 | 已过期被 GC 回收，或 id 被截断/改写（id 本身就是凭证，必须完整） |

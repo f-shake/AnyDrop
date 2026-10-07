@@ -23,6 +23,12 @@ Linux 需要 `clang` + `zlib1g-dev`。缺工具链时可用 `-NoAot` 退回自�
   > `[System.IO.Path]::GetRelativePath`，那是 .NET Core 2.0+ 的 API，5.1（.NET Framework）没有。
   > `pack-win.ps1` 会在开头直接拦住并提示改用 `pwsh`。
 
+  > ⚠ **AOT 未验证的一环**：文件日志用的 Serilog 在**编译期**实测 0 警告（连 IL 分析器都跑过），
+  > 但**原生 AOT 的 ILC 链接阶段未在本机验证**（本机没有原生链接器，`-NoAot` 是唯一能跑的路径）。
+  > 首次在有工具链的机器上跑不带 `-NoAot` 的发布时，请留意 IL2xxx/IL3xxx 警告 ——
+  > `NoWarn` 只覆盖 IL2026/IL3050。真在 ILC 阶段失败的话，退路是在 `Logging/LogFileSetup.cs`
+  > 之外改用一个自写的 `ILoggerProvider`（不引入 Serilog 的 sink 包）。
+
   想一步到位（构建 + 发布 + 组装运维脚本 + 打 zip）：
 
   ```powershell
@@ -45,7 +51,7 @@ Linux 需要 `clang` + `zlib1g-dev`。缺工具链时可用 `-NoAot` 退回自�
 C:\AnyDrop\AnyDrop.Server.exe        发布产物
 C:\AnyDrop\e_sqlite3.dll             SQLite 原生库，必须一起拷（Microsoft.Data.Sqlite 的依赖）
 C:\AnyDrop\anydrop.json              从 anydrop.json.sample 复制后修改
-C:\AnyDrop\run.cmd                   可选，手动启动用
+C:\AnyDrop\run.cmd                   可选，手动启动用（发布包里**不含**它；要用手工从 scripts\run.cmd 拷）
 ```
 
 `anydrop.json` 关键项：`server.pathBase = "/drop"`、`server.publicBaseUrl = "https://fshake.com/drop"`、
@@ -73,7 +79,7 @@ cd C:\AnyDrop
 ## 4. 启动
 
 ```powershell
-.\run.cmd            # 或直接 .\AnyDrop.Server.exe
+.\AnyDrop.Server.exe  # 发布包里没有 run.cmd，直接跑 exe 即可（手工拷过 scripts\run.cmd 才用 .\run.cmd）
 ```
 
 启动日志会打印 `urls / pathBase / publicBaseUrl / dataDir / 内嵌前端`。
@@ -96,10 +102,20 @@ cd C:\AnyDrop
 >
 > ⚠ 但这只挡得住 Information：**Warning/Error 级照常写盘，而且可能带 id** —— `BlobStore` 的
 > 删除/回退失败警告带 `{Path}`（`blobs/xx/<id>`）、`BlobService` 的一致性与打开失败错误带
-> `{BlobId}`、`Middleware` 的未处理异常带原始请求路径。所以 `logs/server.log` 应当按
+> `{BlobId}`、`Middleware` 的未处理异常带原始请求路径。所以 `logs/` 下的日志文件应当按
 > **"含凭证的文件"**管理：别放共享盘、别整份外发。要彻底消除得改代码不再打印 id，目前没做。
 >
-> 验收：`Select-String -Path logs/server.log -Pattern 'Request starting'` 应当**没有输出**
+> **文件日志由应用自己写**：`logs/server-<日期>.log`（默认 `logging:file:rollingInterval=Day` →
+> `server-20261007.log`；改成 `Infinite` 就没有日期段，文件名就是 `server-.log`），保留份数与单文件
+> 上限由 `logging:file` 控制（默认 14 份 / 32 MiB，到大小上限换新文件）。`service-run.cmd` 另把进程的
+> stdout/stderr 重定向到 `logs/bootstrap.log`，用来兜住"日志系统起来之前就失败"的情况
+> （JSON 写坏、漏拷 `e_sqlite3.dll`、exe 被搬走 —— 这几种情况下**应用日志文件根本不会被创建**，
+> 所以排障时先看 `bootstrap.log`）。
+> **每条日志以一行开始**（本地时间戳 + 时区 + 级别 + 来源类别 + 消息），例如
+> `2026-10-07 13:16:35.710 +08:00 [INF] AnyDrop.Server: …`；**带异常的条目后面会跟堆栈多行**，
+> 所以别拿"行数"当"事件数"。
+>
+> 验收：`Select-String -Path logs/server-*.log -Pattern 'Request starting'` 应当**没有输出**
 > （它证明的是"逐请求日志已关闭"，而不是"日志里一定没有 id"）。
 
 > Windows 上还要解决"会话注销就没了"和"重启不自启"：用 `deploy/install-service.ps1` 注册成

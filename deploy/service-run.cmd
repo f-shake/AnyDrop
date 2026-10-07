@@ -39,30 +39,64 @@ rem                           the filter list, but the level set is Warning, so 
 rem                           above still get written)
 rem   BlobService.LogError    "{BlobId}" / "{Path}"  (category NOT in the filter list)
 rem   Middleware.LogError     "... {Method} {Path}"  (raw request path, which contains the id)
-rem So treat logs\server.log as credential-bearing: keep it off shared drives, do not paste
-rem it into chats, issues or tickets, and let the rotation below bound how long it lives.
+rem So treat the log files under logs\ as credential-bearing: keep them off shared drives, do
+rem not paste them into chats, issues or tickets.
 rem The client IP is still recorded by nginx, whose access_log is masked separately.
 set ANYDROP__Logging__LogLevel__Microsoft.AspNetCore=Warning
 set ANYDROP__Logging__LogLevel__AnyDrop.Server.Storage.BlobStore=Warning
 
-if not exist "logs" mkdir "logs"
+rem logs\ must exist before the redirect below. If it cannot be created, the redirect itself fails,
+rem cmd never executes the exe, and ERRORLEVEL stays 0 -- so the scheduled task reports SUCCESS and
+rem the restart-on-failure never fires, with no log left anywhere. So: try to create it, and if that
+rem fails, still start the service (its own file log degrades to console-only by itself) while the
+rem exit code keeps coming from the real process.
+rem NOTE: the trailing backslash matters -- `if exist "logs\"` tests for a DIRECTORY.
+rem A plain `if not exist "logs"` is false when a FILE with that name is sitting there, and then the
+rem redirect below fails, cmd never runs the exe, ERRORLEVEL stays 0, and the task reports SUCCESS.
+if not exist "logs\" mkdir "logs" 2>nul
 
-rem Rotate only when the file grows past 32 MiB, so a crash-loop still keeps the
-rem log from the run that crashed.
-if exist "logs\server.log" for %%A in ("logs\server.log") do if %%~zA GTR 33554432 move /y "logs\server.log" "logs\server.previous.log" >nul
+rem TWO files live under logs\, with different owners:
+rem   logs\server-YYYYMMDD.log   written by the APPLICATION (Serilog: rolling, plus retained-count
+rem                             and size limits -- see logging:file in anydrop.json). With
+rem                             rollingInterval=Infinite the name has no date part: server-.log
+rem   logs\bootstrap.log         written by THIS script: the console mirror of the process plus
+rem                             cmd-level failures (exe missing, exit codes). It exists because a
+rem                             process that dies before the logger is up only writes to stdout.
+rem Do NOT point the redirect below at server-*.log: the Serilog file sink holds that file open with
+rem FileShare.Read (readers only), so a second writer cannot open it for writing. Note what Serilog
+rem does when its target is locked by somebody else: it moves on to server-YYYYMMDD_001.log instead
+rem of failing -- two instances therefore each get their own file, and that extra file shares the
+rem same retainedFileCountLimit budget.
+rem
+rem Rotate bootstrap.log only when it grows past 32 MiB, so a crash-loop still keeps the
+rem log from the run that crashed. (server-*.log rotates itself.)
+if exist "logs\bootstrap.log" for %%A in ("logs\bootstrap.log") do if %%~zA GTR 33554432 move /y "logs\bootstrap.log" "logs\bootstrap.previous.log" >nul
 
-"%~dp0AnyDrop.Server.exe" >> "logs\server.log" 2>&1
+rem Can we actually redirect into bootstrap.log? Ask a CHILD cmd: when `>>` cannot be opened in THIS
+rem shell, cmd skips the command and leaves ERRORLEVEL at 0 -- so the task would report success while
+rem the exe never ran. A child process returns 1 in that case. (The probe appends one blank line.)
+set "CANLOG="
+if exist "logs\" (
+    cmd /c ">>logs\bootstrap.log echo." >nul 2>&1
+    if not errorlevel 1 set "CANLOG=1"
+)
+if defined CANLOG (
+    "%~dp0AnyDrop.Server.exe" >> "logs\bootstrap.log" 2>&1
+) else (
+    echo [%DATE% %TIME%] WARNING: cannot write "%~dp0logs\bootstrap.log" - starting without log redirection. 1>&2
+    "%~dp0AnyDrop.Server.exe"
+)
 set "EXITCODE=%ERRORLEVEL%"
-echo [%DATE% %TIME%] AnyDrop.Server exited with code %EXITCODE% >> "logs\server.log"
+if defined CANLOG echo [%DATE% %TIME%] AnyDrop.Server exited with code %EXITCODE% >> "logs\bootstrap.log"
 rem 9009 is cmd's "command not found". cmd writes its own "not recognized as an internal or
 rem external command" text straight to the stderr handle that is in effect for the failing
-rem command -- so it lands in server.log only because the redirect sits on that very line
+rem command -- so it lands in bootstrap.log only because the redirect sits on that very line
 rem (verified with the unmodified script in a folder without the exe: the raw text is in the
 rem log). This hint is therefore a convenience, not a substitute: it makes the cause readable
 rem from the "exited with code" line alone, which is what you scan a long log for. Note the
 rem dependency -- do not move the redirect off that line, and keep the RUNBOOK troubleshooting
 rem row in sync with both.
-if "%EXITCODE%"=="9009" echo   hint: 9009 = AnyDrop.Server.exe not found (incomplete unpack, or wrong folder) >> "logs\server.log"
+if defined CANLOG if "%EXITCODE%"=="9009" echo   hint: 9009 = AnyDrop.Server.exe not found (incomplete unpack, or wrong folder) >> "logs\bootstrap.log"
 
 rem `endlocal & exit /b %EXITCODE%`, NOT a bare `endlocal`. The task's restart-on-failure only
 rem fires when the action returns a NON-ZERO exit code, and a bare endlocal always succeeds:

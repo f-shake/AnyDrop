@@ -35,6 +35,17 @@
       "default": "Information",
       "Microsoft.AspNetCore": "Warning",
       "AnyDrop.Server.Storage.BlobStore": "Warning"
+    },
+    "file": {
+      "enabled": true,
+      "directory": "logs",
+      "fileNamePrefix": "server-",
+      "rollingInterval": "Day",
+      "retainedFileCountLimit": 14,
+      "fileSizeLimitBytes": 33554432,
+      "rollOnFileSizeLimit": true,
+      "buffered": false,
+      "flushToDiskIntervalSeconds": 0
     }
   }
 }

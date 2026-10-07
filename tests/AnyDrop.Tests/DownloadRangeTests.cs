@@ -169,6 +169,9 @@ public sealed class DownloadRangeTests
         var html = await page.Content.ReadAsStringAsync();
         Assert.Contains("下载文件", html);
         Assert.DoesNotContain("需要读取密钥", html);
+        // 过期时间要给人看：`2026-11-05 14:31:15（UTC）`，不能直接回吐 ISO
+        Assert.Matches(@"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}（UTC）", html);
+        Assert.DoesNotMatch(@"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", html);
         // 页面同样不该把 id 漏给下游
         Assert.Equal("no-referrer", page.Headers.GetValues("Referrer-Policy").Single());
 

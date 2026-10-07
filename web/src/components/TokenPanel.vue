@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { api, humanSize, messageOf } from '@/api/client'
+import { api, formatTime, humanSize, messageOf } from '@/api/client'
 import { session } from '@/session'
 import type { CreateTokenResponse, TokenDto, TokenListResponse } from '@/api/types'
+import { useIsNarrow } from '@/viewport'
 import TokenCreatedDialog from './TokenCreatedDialog.vue'
 
 const items = ref<TokenDto[]>([])
 const loading = ref(false)
+const isNarrow = useIsNarrow()
 const createVisible = ref(false)
 const createdKey = ref('')
 const createdName = ref('')
@@ -93,7 +95,28 @@ defineExpose({ reload })
       <el-button type="primary" size="small" @click="createVisible = true">新建上传密钥</el-button>
     </div>
 
-    <el-table v-loading="loading" :data="items" size="small" empty-text="还没有上传密钥">
+    <!-- 窄屏用卡片列表：与 FileTable 同一个理由（表格固定右列在手机上盖住内容） -->
+    <ul v-if="isNarrow" v-loading="loading" class="anydrop-list">
+      <li v-for="row in items" :key="row.id" class="anydrop-item">
+        <div class="anydrop-item-head">
+          <span class="anydrop-item-name" :title="row.name">{{ row.name }}</span>
+          <el-tag v-if="row.revokedAt" type="info" size="small">已撤销</el-tag>
+          <el-tag v-else type="success" size="small">有效</el-tag>
+        </div>
+        <div class="anydrop-mono anydrop-item-id">{{ row.keyPrefix }}…</div>
+        <div class="anydrop-item-meta">
+          <span>用量 {{ humanSize(row.usedBytes) }} / {{ humanSize(row.quotaBytes) }}</span>
+          <span>单文件 ≤ {{ humanSize(row.maxFileBytes) }}</span>
+          <span :title="row.lastUsedAt ?? undefined">最后使用 {{ formatTime(row.lastUsedAt) }}</span>
+        </div>
+        <div class="anydrop-item-actions">
+          <el-button size="small" type="danger" plain :disabled="!!row.revokedAt" @click="revoke(row)">撤销</el-button>
+        </div>
+      </li>
+      <li v-if="items.length === 0" class="anydrop-empty">还没有上传密钥</li>
+    </ul>
+
+    <el-table v-else v-loading="loading" :data="items" size="small" empty-text="还没有上传密钥">
       <el-table-column label="名称" min-width="140" prop="name" />
       <el-table-column label="前缀" width="110">
         <template #default="{ row }"><span class="anydrop-mono">{{ row.keyPrefix }}…</span></template>
@@ -105,7 +128,9 @@ defineExpose({ reload })
         <template #default="{ row }">{{ humanSize(row.maxFileBytes) }}</template>
       </el-table-column>
       <el-table-column label="最后使用" width="160">
-        <template #default="{ row }">{{ row.lastUsedAt ?? '—' }}</template>
+        <template #default="{ row }">
+          <span :title="row.lastUsedAt ?? undefined">{{ formatTime(row.lastUsedAt) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
@@ -120,7 +145,7 @@ defineExpose({ reload })
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="createVisible" title="新建上传密钥" width="460px">
+    <el-dialog v-model="createVisible" title="新建上传密钥" :width="isNarrow ? '92vw' : '460px'">
       <el-form label-position="top">
         <el-form-item label="名称（便于识别）">
           <el-input v-model="form.name" placeholder="例如 nas-ai-upload" />

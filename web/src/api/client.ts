@@ -93,3 +93,25 @@ export function humanSize(bytes: number): string {
   }
   return `${value.toFixed(value >= 10 ? 0 : 2)} ${units[unit]}`
 }
+
+/**
+ * 接口返回的是 ISO（`2026-11-05T14:31:15Z`，机器友好、可排序），这里只负责**显示**成本地时间的
+ * `yyyy-MM-dd HH:mm:ss`。协议格式不动 —— 脚本还要靠它解析和比较。
+ *
+ * **时区口径**：这里用浏览器的**本地时区**（管理面板是给你自己看的，本地钟点才不误导）。
+ * 服务端直出的下载信息页 `PageEndpoints.HumanTime` 则固定用 **UTC** 并显式标注，
+ * 因为那是给外部收件人看的、对方时区未知。两处格式相同、时区不同，是刻意的。
+ *
+ * 空值/空白给 `—`；解析不了就原样返回：宁可显示得难看，也不要甩一个 Invalid Date。
+ * 精确时刻仍可通过元素的 title 拿到（调用方挂原始 ISO）。
+ */
+export function formatTime(value?: string | null): string {
+  if (!value || value.trim().length === 0) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  )
+}

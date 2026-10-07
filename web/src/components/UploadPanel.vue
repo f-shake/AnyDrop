@@ -2,6 +2,7 @@
 import { onUnmounted, ref } from 'vue'
 import { ApiError, humanSize, messageOf } from '@/api/client'
 import { isUploadAborted, uploadFile, type UploadTask } from '@/api/upload'
+import { copyText } from '@/clipboard'
 import type { UploadResponse } from '@/api/types'
 import { session } from '@/session'
 
@@ -150,14 +151,12 @@ function clearFinished(): void {
 
 async function copyLink(item: QueueItem): Promise<void> {
   if (!item.result) return
-  try {
-    // 非安全上下文（局域网 http://）下 navigator.clipboard 不存在，直接抛异常走兜底
-    await navigator.clipboard.writeText(item.result.url)
+  if (await copyText(item.result.url)) {
     ElMessage.success('直链已复制')
-  } catch {
-    // 这一条下面常驻显示着同一个 url，所以文案可以说「下面」；链接不会随 toast 消失
-    ElMessage.warning('当前环境不允许自动复制，请手动复制下面显示的直链')
+    return
   }
+  // 这一条下面常驻显示着同一个 url，所以文案可以说「下面」；链接不会随 toast 消失
+  ElMessage.warning('浏览器不允许自动复制，请手动复制下面显示的直链')
 }
 </script>
 

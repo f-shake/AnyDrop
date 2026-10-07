@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, api, apiUrl, apiWithBase, basePath, humanSize, normalizeBase, toApiError } from '@/api/client'
+import {
+  ApiError,
+  api,
+  apiUrl,
+  apiWithBase,
+  basePath,
+  formatTime,
+  humanSize,
+  normalizeBase,
+  toApiError,
+} from '@/api/client'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -115,5 +125,36 @@ describe('humanSize', () => {
     [1024 * 1024 * 1024, '1.00 GiB'],
   ])('%i → %s', (bytes, expected) => {
     expect(humanSize(bytes)).toBe(expected)
+  })
+})
+
+describe('formatTime', () => {
+  // 用「本地分量」构造再转成 ISO：这样断言与时区无关，在 UTC 或 UTC+8 的机器上都成立
+  it('把 ISO 显示成本地时间的 yyyy-MM-dd HH:mm:ss', () => {
+    const local = new Date(2026, 10, 5, 14, 31, 15)
+    expect(formatTime(local.toISOString())).toBe('2026-11-05 14:31:15')
+  })
+
+  it('个位数月/日/时/分/秒都补零', () => {
+    const local = new Date(2026, 0, 2, 3, 4, 5)
+    expect(formatTime(local.toISOString())).toBe('2026-01-02 03:04:05')
+  })
+
+  it('空值给占位符（密钥的「最后使用」就是这种）', () => {
+    expect(formatTime(null)).toBe('—')
+    expect(formatTime(undefined)).toBe('—')
+    expect(formatTime('')).toBe('—')
+  })
+
+  it('纯空白也算空值，与服务端 IsNullOrWhiteSpace 对齐', () => {
+    expect(formatTime('   ')).toBe('—')
+  })
+
+  it('解析不了就原样返回，绝不显示 Invalid Date', () => {
+    expect(formatTime('not-a-time')).toBe('not-a-time')
+  })
+
+  it('输出形状固定', () => {
+    expect(formatTime(new Date().toISOString())).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
   })
 })

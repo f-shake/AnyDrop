@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { api, apiUrl, humanSize, messageOf } from '@/api/client'
+import { api, apiUrl, formatTime, humanSize, messageOf } from '@/api/client'
+import { copyText } from '@/clipboard'
 import { session } from '@/session'
 import type { FileInfoDto, FileListResponse } from '@/api/types'
+import { useIsNarrow } from '@/viewport'
 
 const items = ref<FileInfoDto[]>([])
 const total = ref(0)
@@ -10,6 +12,7 @@ const page = ref(1)
 const size = ref(20)
 const query = ref('')
 const loading = ref(false)
+const isNarrow = useIsNarrow()
 
 const expiryVisible = ref(false)
 const expiryDays = ref(30)
@@ -41,18 +44,17 @@ function download(row: FileInfoDto) {
 }
 
 async function copyLink(row: FileInfoDto) {
-  try {
-    // 非安全上下文（局域网 http://）下 navigator.clipboard 不存在，直接抛异常走兜底
-    await navigator.clipboard.writeText(row.url)
+  if (await copyText(row.url)) {
     ElMessage.success('直链已复制')
+    return
+  }
+  // 连 execCommand 都用不了（极端权限策略）才走到这里。兜底不能用 ElMessage：
+  // 它默认 3 秒就销毁（只有 hover 才暂停），用户来不及选中，触屏上更拿不到链接。
+  // 改成占住屏幕、链接是可选中纯文本的弹窗。
+  try {
+    await ElMessageBox.alert(row.url, '请手动复制直链', { confirmButtonText: '知道了' })
   } catch {
-    // 兜底不能用 ElMessage：它默认 3 秒就销毁（只有 hover 才暂停），用户来不及选中，
-    // 触屏上更是拿不到链接。改成占住屏幕、链接是可选中纯文本的弹窗。
-    try {
-      await ElMessageBox.alert(row.url, '请手动复制直链', { confirmButtonText: '知道了' })
-    } catch {
-      // 关掉弹窗即可，无需额外处理
-    }
+    // 关掉弹窗即可，无需额外处理
   }
 }
 
@@ -117,26 +119,60 @@ defineExpose({ reload })
 <template>
   <div class="anydrop-card">
     <div class="anydrop-toolbar">
-      <el-input v-model="query" placeholder="按文件名或 id 搜索" clearable style="width: 240px" @keyup.enter="reload" />
+      <el-input v-model="query" class="anydrop-search" placeholder="按文件名或 id 搜索" clearable @keyup.enter="reload" />
       <el-button @click="reload">搜索</el-button>
       <span class="anydrop-subtitle">共 {{ total }} 个文件</span>
     </div>
 
-    <el-table v-loading="loading" :data="items" size="small" empty-text="还没有文件">
+    <!-- 窄屏用卡片列表：el-table 的固定右列在手机上会盖住内容，操作按钮也挤不下 -->
+    <ul v-if="isNarrow" v-loading="loading" class="anydrop-list">
+      <li v-for="row in items" :key="row.id" class="anydrop-item">
+        <div class="anydrop-item-head">
+          <span class="anydrop-item-name" :title="row.name ?? row.id">{{ row.name ?? '(未命名)' }}</span>
+          <span class="anydrop-subtitle">{{ humanSize(row.size) }}</span>
+        </div>
+        <!-- 手机卡片直接显示完整直链：这里是剪贴板最脆弱的场景（部分内核 execCommand 返回 true
+             但剪贴板为空），必须留一个能手动长按选中的落点，不能只靠复制按钮 -->
+        <div class="anydrop-mono anydrop-item-id" :title="row.url">{{ row.url }}</div>
+        <div class="anydrop-item-meta">
+          <span :title="row.createdAt">上传 {{ formatTime(row.createdAt) }}</span>
+          <span :title="row.pinned ? undefined : row.expiresAt">
+            {{ row.pinned ? '不过期' : `过期 ${formatTime(row.expiresAt)}` }}
+          </span>
+          <span>下载 {{ row.downloadCount }}</span>
+        </div>
+        <div class="anydrop-item-actions">
+          <el-button size="small" @click="copyLink(row)">复制直链</el-button>
+          <el-button size="small" @click="download(row)">下载</el-button>
+          <el-button size="small" @click="openExpiry(row)">改期</el-button>
+          <el-button size="small" @click="togglePin(row)">{{ row.pinned ? '取消保留' : '保留' }}</el-button>
+          <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
+        </div>
+      </li>
+      <li v-if="items.length === 0" class="anydrop-empty">还没有文件</li>
+    </ul>
+
+    <el-table v-else v-loading="loading" :data="items" size="small" empty-text="还没有文件">
       <el-table-column label="文件名" min-width="200">
         <template #default="{ row }">
           <div>{{ row.name ?? '(未命名)' }}</div>
-          <div class="anydrop-mono">{{ row.id }}</div>
+          <!-- 桌面端行里保留紧凑的 id（完整直链会把行撑高两三倍），完整直链在 title 里，
+               复制失败时还有弹窗落点；手机卡片那边则直接显示完整直链。 -->
+          <div class="anydrop-mono" :title="row.url">{{ row.id }}</div>
         </template>
       </el-table-column>
       <el-table-column label="大小" width="100">
         <template #default="{ row }">{{ humanSize(row.size) }}</template>
       </el-table-column>
-      <el-table-column label="上传时间" width="160" prop="createdAt" />
+      <el-table-column label="上传时间" width="160">
+        <template #default="{ row }">
+          <span :title="row.createdAt">{{ formatTime(row.createdAt) }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="过期时间" width="160">
         <template #default="{ row }">
           <span v-if="row.pinned">不过期</span>
-          <span v-else>{{ row.expiresAt }}</span>
+          <span v-else :title="row.expiresAt">{{ formatTime(row.expiresAt) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="下载" width="70" prop="downloadCount" />
@@ -156,13 +192,14 @@ defineExpose({ reload })
       v-model:page-size="size"
       :total="total"
       :page-sizes="[20, 50, 100]"
-      layout="total, sizes, prev, pager, next"
-      style="margin-top: 12px; justify-content: flex-end"
+      :layout="isNarrow ? 'prev, pager, next' : 'total, sizes, prev, pager, next'"
+      :small="isNarrow"
+      class="anydrop-pagination"
       @current-change="reload"
       @size-change="reload"
     />
 
-    <el-dialog v-model="expiryVisible" title="修改过期时间" width="360px">
+    <el-dialog v-model="expiryVisible" title="修改过期时间" :width="isNarrow ? '92vw' : '360px'">
       <el-form label-position="top">
         <el-form-item label="从今天起保留天数（1-3650）">
           <el-input-number v-model="expiryDays" :min="1" :max="3650" />

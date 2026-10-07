@@ -119,10 +119,23 @@ public static class PageEndpoints
             <h1>{name}</h1>
             <p>大小：{HumanSize(blob.Size)}</p>
             <p class="meta">SHA-256：<span class="hash">{blob.Sha256}</span></p>
-            <p class="meta">过期时间：{WebUtility.HtmlEncode(blob.ExpiresAt)}（UTC）</p>
+            <p class="meta">过期时间：{WebUtility.HtmlEncode(HumanTime(blob.ExpiresAt))}（UTC）</p>
             <a class="button" href="{config.PathBase}/v1/blobs/{blob.Id}">下载文件</a>
             """;
         return PageTemplates.Render(PageTemplates.DownloadPath, content);
+    }
+
+    /// <summary>
+    /// ISO（`2026-11-05T14:31:15Z`）→ `2026-11-05 14:31:15`。
+    /// 这一页是给外部收件人看的，对方时区未知，所以固定按 UTC 显示并在页面上标注。
+    /// 解析失败原样返回：宁可显示得难看，也不要变成空白。
+    /// </summary>
+    public static string HumanTime(string? iso)
+    {
+        if (string.IsNullOrWhiteSpace(iso)) return "";
+        return Time.TryParse(iso, out var parsed)
+            ? parsed.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+            : iso;
     }
 
     public static string HumanSize(long bytes)

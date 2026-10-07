@@ -49,6 +49,7 @@ curl -o report.md https://fshake.com/drop/v1/blobs/<id>
 **人上传**走管理面板 `/drop/admin`：登录后拖拽上传，同样得到一条可复制的直链，发给 AI 就能下载。
 
 想看元数据（大小 / sha256 / 过期时间）可以打开 `https://fshake.com/drop/f/<id>`：服务端直出的信息页，同样不需要密钥。
+该页时间按 **UTC** 显示（收件人时区未知），而管理面板里的时间按**浏览器本地时区**显示 —— 格式相同、时区刻意不同。
 
 更详细的接口说明见 [docs/AGENT_UPLOAD.md](docs/AGENT_UPLOAD.md)，部署步骤见 [docs/DEPLOY.md](docs/DEPLOY.md)。
 

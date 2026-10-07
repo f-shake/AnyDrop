@@ -1,3 +1,12 @@
+/* 全局 border-box 复位。
+   缺了它就会出这种事：.anydrop-login 的 width:100% 先算出容器宽度，再额外加上左右内边距，
+   于是卡片比屏幕宽出 24px（手机上右边界直接越界）。Element Plus 自身也是按 border-box 设计的。 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 :root {
   color-scheme: light;
   font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
@@ -34,7 +43,6 @@ body {
 }
 
 .anydrop-shell {
-  box-sizing: border-box;
   max-width: 1180px;
   margin: 0 auto;
   padding: 24px 16px 48px;
@@ -192,4 +200,143 @@ body {
 .anydrop-theme-current {
   margin-left: 6px;
   color: var(--el-color-primary, #409eff);
+}
+
+/* ---------- 窄屏（手机） ----------
+   断点原文必须与 src/viewport.ts 的 NARROW_QUERY 逐字一致（宽度 + 高度两条；
+   tests/viewport.spec.ts 会读本文件原文核对整条 @media）。 */
+
+/* 卡片列表：窄屏替代 el-table —— 表格的固定右列在手机上会盖住内容，操作按钮也挤不下 */
+.anydrop-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.anydrop-item {
+  padding: 12px 0;
+  border-top: 1px solid var(--el-border-color-lighter, #ebeef5);
+}
+
+.anydrop-item:first-child {
+  border-top: 0;
+}
+
+.anydrop-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.anydrop-item-name {
+  font-size: 14px;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.anydrop-item-id {
+  color: var(--anydrop-muted);
+  margin-top: 2px;
+}
+
+.anydrop-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--anydrop-muted);
+}
+
+.anydrop-item-actions {
+  display: flex;
+  /* 明确不换行：按钮换行会把卡片撑高、把最后一个按钮甩到下一行。
+     用 size="small" 让这一排能塞进 390px；更窄的屏（320px）则退化为横向滚动，仍不换行。 */
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin-top: 10px;
+  overflow-x: auto;
+  /* 滚动时不要顺手把页面也带着横向滚 */
+  overscroll-behavior-x: contain;
+}
+
+.anydrop-item-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.anydrop-empty {
+  padding: 16px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--anydrop-muted);
+}
+
+/* 必须带上父选择器提高优先级：Element Plus 的 `.el-input { width: var(--el-input-width) }`
+   是同级 (0,1,0)，而它是**懒加载路由**的样式分块、在入口 CSS 之后注入，同级下它赢 ——
+   只写 `.anydrop-search` 的话桌面端搜索框会变成整行宽，把工具栏挤成两行。 */
+.anydrop-toolbar .anydrop-search {
+  width: 240px;
+  max-width: 100%;
+}
+
+.anydrop-pagination {
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+/* 断点原文必须与 src/viewport.ts 的 NARROW_QUERY 逐字一致（tests/viewport.spec.ts 会读原文核对）。
+   含 max-height：手机横屏宽度会超过 720px，但可用高度只剩 300 多，表格在那种窗口里同样没法用。 */
+@media (max-width: 720px), (max-height: 480px) {
+  .anydrop-shell {
+    padding: 16px 12px 40px;
+  }
+
+  .anydrop-card {
+    padding: 12px;
+    border-radius: 10px;
+  }
+
+  /* 页头换行：标题一行、操作一行，按钮才不会被挤扁 */
+  .anydrop-header {
+    flex-wrap: wrap;
+  }
+
+  .anydrop-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  /* 搜索框独占一行（同样要压过 EP 的 .el-input 宽度） */
+  .anydrop-toolbar .anydrop-search {
+    width: 100%;
+  }
+
+  .anydrop-pagination {
+    justify-content: center;
+  }
+
+  /* 弹窗不得宽于屏幕。JS 侧已按窄屏把 width 改成 92vw，这里再用 max-width 兜一层：
+     EP 自身对 .el-dialog 没有 max-width 声明，所以这条一定生效。 */
+  body .el-dialog {
+    max-width: calc(100vw - 24px);
+    /* 必须**抬优先级**而不是只写属性：EP 把 --el-dialog-margin-top 声明在同一个 .el-dialog 选择器上
+       （(0,1,0)），而它的样式在懒加载分块里、注入在入口 CSS 之后 —— 同优先级下后加载者赢。
+       body .el-dialog 是 (0,1,1)，压过它，与注入顺序无关。 */
+    --el-dialog-margin-top: 8vh;
+  }
+
+  /* ElMessageBox 是命令式创建的，拿不到组件 prop。同样靠 body 前缀抬优先级（EP 在同一个
+     .el-message-box 上声明 --el-messagebox-width: 420px，且分块后加载）。 */
+  body .el-message-box {
+    --el-messagebox-width: calc(100vw - 32px);
+  }
+
+  /* 手动复制直链的弹窗正文是一条长 URL，必须允许断行 */
+  .el-message-box__message {
+    word-break: break-all;
+  }
 }

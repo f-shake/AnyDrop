@@ -21,19 +21,19 @@
     @media (prefers-color-scheme: dark) { .card { background: #1f2229; box-shadow: none; } }
     h1 { font-size: 18px; margin: 0 0 16px; }
     p { line-height: 1.6; font-size: 14px; margin: 8px 0; }
-    label { display: block; font-size: 13px; margin: 16px 0 6px; }
-    input[type=password] {
-      width: 100%; padding: 10px 12px; font-size: 14px; border: 1px solid #c9ced6;
-      border-radius: 8px; background: transparent; color: inherit;
-    }
     button, .button {
       display: inline-block; margin-top: 18px; width: 100%; padding: 11px 16px; font-size: 15px;
       border: 0; border-radius: 8px; background: #2f6feb; color: #fff; cursor: pointer;
       text-align: center; text-decoration: none;
     }
     .meta { font-size: 12px; color: #6b7280; word-break: break-all; margin-top: 6px; }
-    .error { color: #c0392b; font-size: 13px; margin-top: 12px; }
     .hash { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+    /* 手机：收窄留白，让卡片跟上手指的宽度，而不是被 padding 挤成一条 */
+    @media (max-width: 480px) {
+      body { padding: 12px; align-items: flex-start; }
+      .card { padding: 18px; border-radius: 10px; }
+      h1 { font-size: 17px; }
+    }
   </style>
 </head>
 <body>

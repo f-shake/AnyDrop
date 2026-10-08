@@ -12,6 +12,10 @@ web/dist/
 src/AnyDrop.Server/wwwroot/
 src/AnyDrop.Server/wwwroot.g.props
 
+# Python（capabilities/ 下的 CLI 与其测试）
+__pycache__/
+*.pyc
+
 # 运行时数据与密钥
 data/
 *.log

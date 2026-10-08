@@ -89,6 +89,7 @@ src/AnyDrop.Server/   ASP.NET Core minimal API（AOT 单文件）
   Maintenance/        过期与孤儿回收
 web/                  Vue 3 + Vite + Element Plus + TS 管理界面
 tests/AnyDrop.Tests/  xUnit v3（进程内运行器）
+capabilities/         给 agent 用的能力（skill 正本 + CLI，纯 Python 标准库）
 scripts/              构建、发布、取件示例
 deploy/               nginx 样板、第三方许可
 docs/                 计划、接口说明、部署步骤
@@ -101,6 +102,7 @@ dotnet build AnyDrop.slnx                       # 编译（含 AOT 分析器，�
                                                 # 注意：服务正在跑时 exe 被锁，会以 MSB3027 失败 —— 先停服务
 dotnet run  --project tests/AnyDrop.Tests       # 跑全部测试（xunit v3 进程内运行器）
 cd web && npm run typecheck && npm run test     # 前端类型检查与单测
+python capabilities/anydrop/scripts/tests/test_anydrop.py   # AI 上传能力单测（零依赖）
 pwsh ./scripts/build-all.ps1                    # 前端 + 服务端一起发布（win-x64）
 pwsh ./scripts/pack-win.ps1                     # 打出可拷到 Windows VPS 的发布包（release/ + zip）
 ./scripts/build-web.sh                          # Linux/macOS 等价的前端构建 + 内嵌清单生成
